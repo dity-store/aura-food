@@ -1,0 +1,6 @@
+{
+  "name": "Aura Food",
+  "description": "Sistem POS Offline-First dengan sinkronisasi Google Sheets, Capacitor, dan cetak struk thermal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
