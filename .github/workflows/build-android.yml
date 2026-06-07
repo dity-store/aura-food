@@ -45,6 +45,10 @@ jobs:
         run: |
           npx cap sync android
 
+      - name: Validate and Fix Gradle Wrapper Jar
+        run: |
+          npx tsx scripts/fix_gradle_wrapper.js
+
       - name: Set gradlew executable
         run: chmod +x android/gradlew
 
