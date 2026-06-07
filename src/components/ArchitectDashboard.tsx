@@ -204,30 +204,30 @@ jobs:
 `;
 
   // Directory Structure Tree
-  const dirStructure = `📦 POS-Workspace-Root/
-├── 📁 .github/              <-- Integrasi GitHub API & CI/CD pipeline
-│   └── 📁 workflows/
-│       └── 📄 android.yml    <-- GitHub Actions Build Script (APK generator)
-├── 📁 android/              <-- Native Android Platform (di-generate oleh Capacitor)
-│   ├── 📁 app/
-│   │   ├── 📁 src/main/
-│   │   │   ├── 📁 java/com/pos/mobile/
-│   │   │   │   └── 📄 WebAppInterface.java  <-- Javascript Bridge Cetak Thermal
-│   │   │   └── 📄 AndroidManifest.xml       <-- Manifest Permission (Internet, Print)
-│   │   └── 📄 build.gradle
-│   ├── 📄 build.gradle
-│   └── 📄 gradlew           <-- Gradle wrapper wrapper script (CI target/auto-healed)
-├── 📁 dist/                 <-- Hasil bundle frontend SPA statis (Vite build target)
-├── 📁 src/                  <-- Source code modul POS React
-│   ├── 📁 components/       <-- Modular UI (Simulator, Receipt, Specs)
-│   ├── 📁 utils/            <-- Modul offline DB & sync manager
-│   ├── 📄 App.tsx           <-- Main Layout
-│   ├── 📄 types.ts          <-- Type checking & interfaces
-│   └── 📄 index.css
-├── 📄 capacitor.config.json <-- Konfigurasi bundle Capacitor Android
-├── 📄 package.json          <-- Dependencies & script npm
-├── 📄 vite.config.ts        <-- Konfigurasi build Vite
-└── 📄 GoogleAppsScript_code.gs <-- File backup Google Apps Script backend`;
+  const dirStructure = `POS-Workspace-Root/
+├── .github/              <-- Integrasi GitHub API & CI/CD pipeline
+│   └── workflows/
+│       └── android.yml    <-- GitHub Actions Build Script (APK generator)
+├── android/              <-- Native Android Platform (di-generate oleh Capacitor)
+│   ├── app/
+│   │   ├── src/main/
+│   │   │   ├── java/com/pos/mobile/
+│   │   │   │   └── WebAppInterface.java  <-- Javascript Bridge Cetak Thermal
+│   │   │   └── AndroidManifest.xml       <-- Manifest Permission (Internet, Print)
+│   │   └── build.gradle
+│   ├── build.gradle
+│   └── gradlew           <-- Gradle wrapper wrapper script (CI target/auto-healed)
+├── dist/                 <-- Hasil bundle frontend SPA statis (Vite build target)
+├── src/                  <-- Source code modul POS React
+│   ├── components/       <-- Modular UI (Simulator, Receipt, Specs)
+│   ├── utils/            <-- Modul offline DB & sync manager
+│   ├── App.tsx           <-- Main Layout
+│   ├── types.ts          <-- Type checking & interfaces
+│   └── index.css
+├── capacitor.config.json <-- Konfigurasi bundle Capacitor Android
+├── package.json          <-- Dependencies & script npm
+├── vite.config.ts        <-- Konfigurasi build Vite
+└── GoogleAppsScript_code.gs <-- File backup Google Apps Script backend`;
 
   return (
     <div className="bg-white rounded-2xl border border-zinc-200/80 shadow-sm overflow-hidden" id="architect-section">

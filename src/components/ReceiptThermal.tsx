@@ -1,13 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { Transaction } from '../types';
+import { getFormattedMenuDisplay } from '../utils/formatter';
 import { Printer, Copy, Check, FileCode, AlertCircle, Share2, PrinterIcon } from 'lucide-react';
 import Barcode from 'react-barcode';
 
 interface ReceiptProps {
   transaction: Transaction;
+  hideSimulatorFrame?: boolean;
+  branchName?: string;
+  branchLocation?: string;
 }
 
-export default function ReceiptThermal({ transaction }: ReceiptProps) {
+export default function ReceiptThermal({ transaction, hideSimulatorFrame, branchName, branchLocation }: ReceiptProps) {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [printStatus, setPrintStatus] = useState<'idle' | 'generating' | 'success'>('idle');
 
@@ -17,103 +21,117 @@ export default function ReceiptThermal({ transaction }: ReceiptProps) {
     setPrintStatus('generating');
     setTimeout(() => {
       setPrintStatus('success');
-      alert("PROSES CETAK BERSIMULASI: Instruksi dikirim ke printer bluetooth (thermal).");
       setTimeout(() => setPrintStatus('idle'), 3000);
     }, 1200);
   };
+  
+  const finalBranchName = branchName || transaction.cabang || 'MATARAM';
+  const finalBranchLocation = branchLocation || 'Jl. R Suprapto, Taman Sari, Mataram';
+
+  const content = (
+    <div 
+      ref={receiptRef}
+      className="p-6 bg-white font-mono text-[11px] text-[#09090b] leading-relaxed tracking-tight select-none border-b border-dashed border-[#d4d4d8]"
+      style={{ fontFamily: '"Courier New", Courier, monospace' }}
+    >
+      <div className="text-center mb-4">
+        <p className="text-base font-black tracking-widest uppercase text-black">AURA FOOD</p>
+        <p className="text-[10px] mt-1 text-black">{finalBranchLocation}</p>
+        <p className="text-[10px] text-black">Telp: 0821 4752 1751</p>
+        <p className="text-[9px] text-black mt-0.5"><span className="font-bold">FB:</span> AuraFood &bull; <span className="font-bold">IG:</span> @aura_food22</p>
+        <p className="my-2 border-t border-dashed border-black"></p>
+      </div>
+
+      <table className="w-full text-[10px] mb-3 text-black">
+        <tbody>
+          <tr>
+            <td>No.</td>
+            <td className="text-right font-bold text-black">{transaction.id}</td>
+          </tr>
+          <tr>
+            <td>Tgl.</td>
+            <td className="text-right">{new Date(transaction.timestamp).toLocaleString('id-ID')}</td>
+          </tr>
+          <tr>
+            <td>Cabang</td>
+            <td className="text-right font-bold uppercase text-black">{finalBranchName}</td>
+          </tr>
+          <tr>
+            <td>Lokasi</td>
+            <td className="text-right text-black">{finalBranchLocation}</td>
+          </tr>
+          <tr>
+            <td>Kasir</td>
+            <td className="text-right uppercase text-black">Reguler</td>
+          </tr>
+          <tr>
+            <td>Bayar</td>
+            <td className="text-right font-bold uppercase text-black">{transaction.paymentMethod}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p className="my-2 border-t border-dashed border-black"></p>
+
+      <div className="grid grid-cols-12 font-bold mb-1 text-[10px] text-black">
+        <span className="col-span-6">ITEM</span>
+        <span className="col-span-2 text-right">QTY</span>
+        <span className="col-span-4 text-right">JUMLAH</span>
+      </div>
+
+      <p className="my-1 border-t border-dashed border-black"></p>
+
+      <div className="space-y-2 mt-2 mb-3 text-black">
+        {transaction.detail.map((item, index) => (
+          <div key={index} className="grid grid-cols-12 leading-tight">
+            <span className="col-span-6 font-bold leading-tight pr-1 line-clamp-2">{getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN)}</span>
+            <span className="col-span-2 text-right">{item.QTY}</span>
+            <span className="col-span-4 text-right font-bold">
+              Rp{item.SUBTOTAL.toLocaleString('id-ID')}
+            </span>
+            <span className="col-span-12 text-[9px] text-black mt-0.5">
+              @ Rp{item.HARGA_SATUAN.toLocaleString('id-ID')}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <p className="my-2 border-t-2 border-dashed border-black"></p>
+
+      <div className="flex justify-between items-center py-1">
+        <span className="font-bold text-xs uppercase tracking-widest text-black">Total</span>
+        <span className="font-black text-sm text-black">Rp{total.toLocaleString('id-ID')}</span>
+      </div>
+
+      <p className="my-3 border-t border-dashed border-black"></p>
+
+      <div className="text-center space-y-1 mb-2">
+        <p className="text-[11px] font-black tracking-widest uppercase text-black">TERIMA KASIH</p>
+        <p className="text-[9px] text-black pt-1">Barang yang sudah dibeli<br/>tidak dapat ditukar / dikembalikan</p>
+      </div>
+
+      <div className="flex flex-col items-center justify-center mt-3 scale-90 origin-top">
+        <Barcode value={transaction.id} width={1.2} height={35} fontSize={10} margin={0} displayValue={true} background="transparent" />
+      </div>
+    </div>
+  );
+
+  if (hideSimulatorFrame) {
+    return content;
+  }
 
   return (
     <div className="flex flex-col items-center justify-center py-2 grayscale" id="thermal-section">
-      <div className="w-full max-w-[340px] bg-white border border-zinc-300 shadow-xl rounded-2xl overflow-hidden relative">
-        <div className="bg-zinc-100 px-4 py-2 flex justify-between items-center border-b border-zinc-200">
-          <span className="text-[10px] font-mono font-bold text-zinc-600 uppercase tracking-widest flex items-center gap-1.5">
+      <div className="w-full max-w-[340px] bg-white border border-[#d4d4d8] shadow-xl rounded-2xl overflow-hidden relative">
+        <div className="bg-[#f4f4f5] px-4 py-2 flex justify-between items-center border-b border-[#e4e4e7]">
+          <span className="text-[10px] font-mono font-bold text-[#52525b] uppercase tracking-widest flex items-center gap-1.5">
             <PrinterIcon className="h-3 w-3" />
             Thermal 80mm
           </span>
-          <span className="h-2 w-2 rounded-full bg-zinc-400"></span>
+          <span className="h-2 w-2 rounded-full bg-[#a1a1aa]"></span>
         </div>
 
-        <div 
-          ref={receiptRef}
-          className="p-6 bg-white font-mono text-[11px] text-zinc-950 leading-relaxed tracking-tight select-none border-b border-dashed border-zinc-300"
-          style={{ fontFamily: '"Courier New", Courier, monospace' }}
-        >
-          <div className="text-center mb-4">
-            <p className="text-base font-black tracking-widest uppercase text-black">AURA FOOD</p>
-            <p className="text-[10px] mt-1 text-black">Jl. R Suprapto, Taman Sari, Mataram</p>
-            <p className="text-[10px] text-black">Telp: 0821 4752 1751</p>
-            <p className="text-[9px] text-black mt-0.5"><span className="font-bold">FB:</span> AuraFood &bull; <span className="font-bold">IG:</span> @aura_food22</p>
-            <p className="my-2 border-t border-dashed border-black"></p>
-          </div>
-
-          <table className="w-full text-[10px] mb-3 text-black">
-            <tbody>
-              <tr>
-                <td>No.</td>
-                <td className="text-right font-bold text-black">{transaction.id}</td>
-              </tr>
-              <tr>
-                <td>Tgl.</td>
-                <td className="text-right">{new Date(transaction.timestamp).toLocaleString('id-ID')}</td>
-              </tr>
-              <tr>
-                <td>Cabang</td>
-                <td className="text-right font-bold uppercase text-black">{transaction.cabang || 'MATARAM'}</td>
-              </tr>
-              <tr>
-                <td>Kasir</td>
-                <td className="text-right uppercase text-black">Reguler</td>
-              </tr>
-              <tr>
-                <td>Bayar</td>
-                <td className="text-right font-bold uppercase text-black">{transaction.paymentMethod}</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <p className="my-2 border-t border-dashed border-black"></p>
-
-          <div className="grid grid-cols-12 font-bold mb-1 text-[10px] text-black">
-            <span className="col-span-6">ITEM</span>
-            <span className="col-span-2 text-right">QTY</span>
-            <span className="col-span-4 text-right">JUMLAH</span>
-          </div>
-
-          <p className="my-1 border-t border-dashed border-black"></p>
-
-          <div className="space-y-2 mt-2 mb-3 text-black">
-            {transaction.items.map((item, index) => (
-              <div key={index} className="grid grid-cols-12 leading-tight">
-                <span className="col-span-6 font-bold truncate pr-1">{item.product.name}</span>
-                <span className="col-span-2 text-right">{item.quantity}</span>
-                <span className="col-span-4 text-right font-bold">
-                  {Math.round(item.product.price * item.quantity).toLocaleString('id-ID')}
-                </span>
-                <span className="col-span-12 text-[9px] text-black mt-0.5">
-                  @ {item.product.price.toLocaleString('id-ID')}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <p className="my-2 border-t-2 border-dashed border-black"></p>
-
-          <div className="flex justify-between items-center py-1">
-            <span className="font-bold text-xs uppercase tracking-widest text-black">Total</span>
-            <span className="font-black text-sm text-black">Rp {total.toLocaleString('id-ID')}</span>
-          </div>
-
-          <p className="my-3 border-t border-dashed border-black"></p>
-
-          <div className="text-center space-y-1 mb-2">
-            <p className="text-[11px] font-black tracking-widest uppercase text-black">TERIMA KASIH</p>
-            <p className="text-[9px] text-black pt-1">Barang yang sudah dibeli<br/>tidak dapat ditukar / dikembalikan</p>
-          </div>
-
-          <div className="flex flex-col items-center justify-center mt-3 scale-90 origin-top">
-            <Barcode value={transaction.id} width={1.2} height={35} fontSize={10} margin={0} displayValue={true} background="transparent" />
-          </div>
-        </div>
+        {content}
 
       </div>
     </div>
