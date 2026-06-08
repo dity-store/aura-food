@@ -41,6 +41,11 @@ jobs:
         run: |
           npm run build
 
+      - name: Generate Custom App Icons and Splashes
+        run: |
+          npx tsx scripts/generate_android_icons.js
+          npx @capacitor/assets generate --android
+
       - name: Sync Capacitor Android App
         run: |
           npx cap sync android

@@ -28,14 +28,24 @@ async function generate() {
     console.log('Updating high-resolution resource and asset icons...');
     const highResIcon = image.clone().resize({ w: 1024, h: 1024 });
     
+    // Create high-quality 2732x2732 splash screen image (clean white background with centered 600x600 logo)
+    console.log('Generating high-resolution splash screen images...');
+    const splashCanvas = new Jimp({ width: 2732, height: 2732, color: 0xFFFFFFFF });
+    const splashLogo = image.clone().resize({ w: 600, h: 600 });
+    const splashX = Math.round((2732 - 600) / 2);
+    const splashY = Math.round((2732 - 600) / 2);
+    splashCanvas.composite(splashLogo, splashX, splashY);
+    
     const resourcesPath = path.join(process.cwd(), 'resources');
     const assetsPath = path.join(process.cwd(), 'assets');
     
     if (fs.existsSync(resourcesPath)) {
       await highResIcon.write(path.join(resourcesPath, 'icon.png'));
+      await splashCanvas.write(path.join(resourcesPath, 'splash.png'));
     }
     if (fs.existsSync(assetsPath)) {
       await highResIcon.write(path.join(assetsPath, 'icon.png'));
+      await splashCanvas.write(path.join(assetsPath, 'splash.png'));
     }
 
     for (const config of CONFIGS) {
