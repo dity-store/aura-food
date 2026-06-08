@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Transaction, Cabang } from '../types';
 import { getTransactions, getTransactionsFromGAS } from '../utils/db';
 import { Search, Filter, X, ArrowLeft, ReceiptText, ChevronLeft, ChevronRight, CalendarClock, Printer, Trash2, Database, Plus } from 'lucide-react';
@@ -41,40 +41,66 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
   const [appliedHistoryFilter, setAppliedHistoryFilter] = useState<HistoryFilterState>(() => getDefaultFilterState(initialBranchFilter));
   const [tempHistoryFilter, setTempHistoryFilter] = useState<HistoryFilterState>(() => getDefaultFilterState(initialBranchFilter));
   const [historyModalTx, setHistoryModalTx] = useState<Transaction | null>(null);
+  const lastFetchParamsRef = useRef<string>('');
 
   useEffect(() => {
     async function loadData() {
       try {
-        let localTxs: Transaction[] = [];
-        if (activeBranch === 'ADMIN') {
-          localTxs = await getTransactions();
+        const fetchBranch = activeBranch === 'ADMIN' ? (appliedHistoryFilter.branch || 'All') : activeBranch;
+        const currentParamsKey = JSON.stringify({
+          activeBranch,
+          fetchBranch,
+          refreshTrigger
+        });
+
+        // Optimization: if params identical, don't fetch remote unless refreshTrigger changed
+        const skipRemote = lastFetchParamsRef.current === currentParamsKey;
+
+        let finalTxs: Transaction[] = [];
+        
+        // 1. Get all local first (including pending_sync)
+        const allLocal = await getTransactions();
+        let displayTxs = [...allLocal];
+
+        // 2. Fetch Remote and Overwrite Local synced if needed
+        if (activeBranch === 'ADMIN' && !skipRemote) {
           try {
-            const remoteTxs = await getTransactionsFromGAS('All');
-            if (remoteTxs && remoteTxs.length > 0) {
-               const localMap = new Map(localTxs.map(t => [t.id, t]));
-               remoteTxs.forEach(rt => {
-                 if (!localMap.has(rt.id)) {
-                   localTxs.push(rt);
-                 } else {
-                   localMap.set(rt.id, {...localMap.get(rt.id)!, status: 'synced'});
-                   localTxs = Array.from(localMap.values());
-                 }
-               });
+            const remoteTxs = await getTransactionsFromGAS(fetchBranch);
+            if (remoteTxs) {
+               // Per user request: "Menimpa setiap kali get data, bukan ditumpuk"
+               // We keep local 'pending_sync' but replace 'synced' for the fetched branch scope
+               const { saveTransaction, clearSyncedTransactions } = await import('../utils/db');
+               
+               // 1. Clear local synced transactions for this scope to strictly "overwrite"
+               await clearSyncedTransactions(fetchBranch === 'All' ? undefined : fetchBranch);
+               
+               // 2. Save the new ones
+               for (const rt of remoteTxs) {
+                 await saveTransaction(rt);
+               }
+               
+               // Mark as fetched
+               lastFetchParamsRef.current = currentParamsKey;
+               
+               // Reload after saving to DB to have consistent state
+               const refreshed = await getTransactions();
+               displayTxs = refreshed;
             }
-          } catch (e) {}
-        } else {
-          const allTxs = await getTransactions();
-          localTxs = allTxs.filter(tx => String(tx.cabang) === activeBranch);
+          } catch (e) {
+            console.warn("History remote fetch failed:", e);
+          }
+        } else if (activeBranch !== 'ADMIN') {
+          displayTxs = allLocal.filter(tx => String(tx.cabang) === activeBranch);
         }
         
-        localTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setHistory(localTxs);
+        displayTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setHistory(displayTxs);
       } catch (err) {
         console.error("Error loading history:", err);
       }
     }
     loadData();
-  }, [activeBranch, refreshTrigger]);
+  }, [activeBranch, refreshTrigger, appliedHistoryFilter.branch]);
 
   let filteredHistory = [...history];
 
@@ -177,31 +203,33 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
       <main className="flex-1 overflow-y-auto w-full pb-safe bg-neutral-50 relative">
         <div className="max-w-2xl mx-auto p-4 space-y-3">
             {history.length === 0 ? (
-                <div className="py-16 flex flex-col items-center justify-center text-center bg-zinc-50 border border-zinc-200/50 rounded-2xl">
-                  <ReceiptText className="h-8 w-8 text-zinc-300 mb-3" />
-                  <p className="text-zinc-500 font-medium text-xs mb-3">Belum ada transaksi dibuat.</p>
+                <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+                  <ReceiptText className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
+                  <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Riwayat Kosong</p>
+                  <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan pesanan hari ini di database lokal.</p>
                   {activeBranch !== 'ADMIN' && (
                     <button 
                       onClick={onCreateTransaction || onBack}
-                      className="bg-red-50 text-red-700 hover:bg-red-100 font-bold text-[10px] px-4 py-2 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-wider cursor-pointer"
+                      className="bg-red-50 text-red-700 hover:bg-red-100 font-black text-[10px] px-6 py-3 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-widest cursor-pointer mt-4 border border-red-100"
                     >
-                      <Plus className="h-3 w-3" /> Buat Transaksi
+                      <Plus className="h-4 w-4" /> Mulai Transaksi Baru
                     </button>
                   )}
                 </div>
             ) : filteredHistory.length === 0 ? (
-                <div className="py-12 flex flex-col items-center justify-center text-center bg-zinc-50 border border-zinc-200/50 rounded-2xl animate-in fade-in duration-200">
-                  <Search className="h-8 w-8 text-zinc-300 mb-3" />
-                  <p className="text-zinc-500 font-medium text-xs mb-4">Tidak ada hasil untuk pencarian/filter ini.<br/>Coba kata kunci lain.</p>
+                <div className="flex items-center justify-center flex-col text-zinc-400 py-16 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm animate-in fade-in duration-200">
+                  <Search className="h-12 w-12 mb-4 opacity-70 text-zinc-300" />
+                  <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Tidak Ditemukan</p>
+                  <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Tidak ada hasil yang sesuai dengan filter pencarian Anda.</p>
                   <button 
                     onClick={() => {
                       setIsSearchHistoryActive(false);
                       setHistorySearchQuery('');
                       setAppliedHistoryFilter(getDefaultFilterState());
                     }}
-                    className="bg-red-50 text-red-700 hover:bg-red-100 font-bold text-[10px] px-4 py-2 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-wider cursor-pointer"
+                    className="bg-zinc-50 text-zinc-600 hover:bg-zinc-100 font-black text-[10px] px-6 py-3 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-widest cursor-pointer mt-4 border border-zinc-200"
                   >
-                    <Trash2 className="h-3 w-3" /> Hapus Filter
+                    <Trash2 className="h-4 w-4 text-red-700" /> Reset Carian
                   </button>
                 </div>
             ) : (
@@ -407,7 +435,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                               {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
                             </div>
                             <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
-                              Rp{(item.HARGA * item.QTY).toLocaleString('id-ID')}
+                              Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
                             </div>
                           </div>
                         ))}

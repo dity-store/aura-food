@@ -1,7 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Transaction } from '../types';
-import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics } from '../utils/db';
-import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard } from 'lucide-react';
+import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics, triggerGASSyncRekapHarian } from '../utils/db';
+import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar } from 'lucide-react';
+import { getSessionCache, setSessionDashboard, setSessionFilters } from '../utils/sessionCache';
+
+const getTodayLocalDateStr = () => {
+  const d = new Date();
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dy = String(d.getDate()).padStart(2, '0');
+  return `${yr}-${mo}-${dy}`;
+};
+
+const formatIndonesianDate = (dateStr: string) => {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const months = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const dayName = days[d.getDay()];
+    const dateNum = d.getDate();
+    const monthName = months[d.getMonth()];
+    const yearNum = d.getFullYear();
+    return `${dayName}, ${dateNum} ${monthName} ${yearNum}`;
+  } catch {
+    return dateStr;
+  }
+};
 
 interface AuraDashboardProps {
   onNavigateToPOS: () => void;
@@ -13,12 +42,24 @@ interface AuraDashboardProps {
 }
 
 export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNavigateToHistory, activeBranch, onSelectTransaction, cabangList }: AuraDashboardProps) {
+  const session = getSessionCache();
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [allQueue, setAllQueue] = useState<any[]>([]);
-  const [selectedAdminBranch, setSelectedAdminBranch] = useState<string>('Semua'); // 'Semua' or ID_CABANG
+  
+  // Initialize filter from session cache or localStorage or default
+  const [selectedAdminBranch, setSelectedAdminBranch] = useState<string>(() => {
+    return session.filters.dashboard?.selectedAdminBranch || localStorage.getItem('AURA_DASHBOARD_FILTER_BRANCH') || 'Semua';
+  });
+
+  const [selectedAdminDate, setSelectedAdminDate] = useState<string>(() => {
+    return session.filters.dashboard?.selectedAdminDate || localStorage.getItem('AURA_DASHBOARD_FILTER_DATE') || getTodayLocalDateStr();
+  });
+  
+  // Ref to prevent redundant fetches if params are identical
+  const lastFetchParamsRef = useRef<string>(session.dashboard.lastParams);
   
   // Setup cache key helper
-  const getCacheKey = (branch: string) => `cached_dashboard_metrics_${branch}`;
+  const getCacheKey = (branch: string, date: string) => `cached_dashboard_metrics_${branch}_${date}`;
 
   // States for server-side admin metrics loaded from cache immediately
   const [adminMetrics, setAdminMetrics] = useState<{
@@ -28,9 +69,13 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
     recentTransactions: Transaction[];
   } | null>(() => {
+    // Priority: 1. Session Memory, 2. Persistent Storage
+    if (session.dashboard.data) return session.dashboard.data;
+
     try {
-      const initialBranch = activeBranch === 'ADMIN' ? 'Semua' : activeBranch;
-      const cached = localStorage.getItem(`cached_dashboard_metrics_${initialBranch}`);
+      const initialBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
+      const initialDate = session.filters.dashboard?.selectedAdminDate || localStorage.getItem('AURA_DASHBOARD_FILTER_DATE') || getTodayLocalDateStr();
+      const cached = localStorage.getItem(`cached_dashboard_metrics_${initialBranch}_${initialDate}`);
       return cached ? JSON.parse(cached) : null;
     } catch {
       return null;
@@ -39,6 +84,22 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   
   const [loadingMetrics, setLoadingMetrics] = useState<boolean>(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [isTriggeringRekap, setIsTriggeringRekap] = useState(false);
+  const [showConfirmRekap, setShowConfirmRekap] = useState(false);
+
+  const performTriggerRekap = async () => {
+    setShowConfirmRekap(false);
+    setIsTriggeringRekap(true);
+    try {
+      await triggerGASSyncRekapHarian();
+      alert("Rekap Harian berhasil dipicu!");
+      loadStats(true); // reload stats
+    } catch (e: any) {
+      alert("Gagal memicu Rekap: " + (e.message || "Kesalahan jaringan"));
+    } finally {
+      setIsTriggeringRekap(false);
+    }
+  };
 
   // Pull to refresh states
   const [pullDistance, setPullDistance] = useState(0);
@@ -70,14 +131,19 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
   const loadStats = async (forceRemote = false) => {
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
-    const cacheKey = getCacheKey(currentBranch);
+    const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
+    const currentParamsKey = JSON.stringify({ activeBranch, currentBranch, selectedAdminDate });
+
+    // Guard: don't fetch if no force and same as last
+    if (!forceRemote && lastFetchParamsRef.current === currentParamsKey) {
+      return; 
+    }
 
     if (!forceRemote) {
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
         try {
           setAdminMetrics(JSON.parse(cached));
-          return;
         } catch (e) {
           console.error(e);
         }
@@ -90,9 +156,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     if (activeBranch === 'ADMIN') {
       try {
         const apiBranchId = selectedAdminBranch === 'Semua' ? 'All' : selectedAdminBranch;
-        const metrics = await getAdminDashboardMetrics(apiBranchId);
+        const metrics = await getAdminDashboardMetrics(apiBranchId, selectedAdminDate);
         setAdminMetrics(metrics);
         localStorage.setItem(cacheKey, JSON.stringify(metrics));
+        lastFetchParamsRef.current = currentParamsKey;
+        setSessionDashboard(currentParamsKey, metrics);
       } catch (err: any) {
         console.error("Gagal memuat metrik dashboard admin dari GAS:", err);
         setMetricsError(err.message || "Gagal menghubungi server Web App.");
@@ -153,6 +221,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
         setAdminMetrics(localMetricsObj);
         localStorage.setItem(cacheKey, JSON.stringify(localMetricsObj));
+        lastFetchParamsRef.current = currentParamsKey;
+        setSessionDashboard(currentParamsKey, localMetricsObj);
       } catch (err) {
         console.error("Error loading dashboard statistics:", err);
       } finally {
@@ -171,21 +241,29 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
   useEffect(() => {
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
-    const cacheKey = getCacheKey(currentBranch);
+    const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
     const cached = localStorage.getItem(cacheKey);
+    
+    // Save filter state to persist
+    if (activeBranch === 'ADMIN') {
+      localStorage.setItem('AURA_DASHBOARD_FILTER_BRANCH', selectedAdminBranch);
+      localStorage.setItem('AURA_DASHBOARD_FILTER_DATE', selectedAdminDate);
+      setSessionFilters('dashboard', { selectedAdminBranch, selectedAdminDate });
+    }
+
+    // First, set from cache for instantaneous UI response (Optimistic load)
     if (cached) {
       try {
         setAdminMetrics(JSON.parse(cached));
       } catch (e) {
         console.error(e);
       }
-    } else {
-      // Gak ada cache? Load remote sekali
-      loadStats(true);
     }
-
-    getSyncQueue().then(setAllQueue).catch(err => console.error(err));
-  }, [activeBranch, selectedAdminBranch]);
+    
+    // Then ALWAYS fetch fresh stats in the background silently, but honor identical filters to prevent loading spinner
+    loadStats(false);
+    
+  }, [activeBranch, selectedAdminBranch, selectedAdminDate]);
 
   const currentBranchFilter = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
   
@@ -276,15 +354,41 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
       {activeBranch === 'ADMIN' && (
         <div className="bg-white border border-zinc-200/80 px-4 py-3 sm:p-5 rounded-[24px] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-left relative overflow-hidden">
-          <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
             <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center justify-center">
               <Activity className="h-4 w-4 sm:h-5 sm:w-5 animate-pulse" />
             </div>
-            <div>
-              <h4 className="text-[10px] sm:text-xs font-bold text-zinc-900 uppercase tracking-widest">Pemantau Multi-Cabang</h4>
-              <p className="text-[9px] text-zinc-500 mt-0.5 leading-relaxed max-w-sm hidden sm:block">
-                Pilih cabang di samping untuk memfilter transaksi.
-              </p>
+            <div className="flex-1 flex flex-col justify-center">
+              <div className="flex items-center justify-between sm:justify-start gap-3">
+                <h4 className="text-[10px] sm:text-xs font-bold text-zinc-900 uppercase tracking-widest">Pemantau Multi-Cabang</h4>
+                <button
+                  onClick={() => setShowConfirmRekap(true)}
+                  disabled={isTriggeringRekap}
+                  className="flex-none uppercase text-[8px] sm:text-[9px] font-extrabold px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg transition cursor-pointer active:scale-95 whitespace-nowrap flex items-center justify-center gap-1.5 bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200"
+                >
+                  <Database className={`h-3 w-3 ${isTriggeringRekap ? 'animate-spin' : ''}`} />
+                  {isTriggeringRekap ? 'Memproses...' : 'Rekap Harian'}
+                </button>
+              </div>
+              <div className="text-[11px] text-zinc-500 mt-1 leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-1">
+                <div className="relative flex items-center gap-2 bg-zinc-50 border border-zinc-200 hover:border-zinc-350 hover:bg-zinc-100 transition-all rounded-xl px-3 py-1.5 cursor-pointer active:scale-97 overflow-hidden">
+                  <Calendar className="h-3.5 w-3.5 text-red-650 shrink-0" />
+                  <span className="font-extrabold text-zinc-805 tracking-tight group-hover:text-red-750 transition-colors">
+                    {formatIndonesianDate(selectedAdminDate)}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-450 shrink-0 ml-0.5" />
+                  <input 
+                    type="date"
+                    value={selectedAdminDate}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setSelectedAdminDate(e.target.value);
+                      }
+                    }}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <div className="flex gap-2 self-stretch sm:self-auto shrink-0 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide w-full sm:w-auto">
@@ -331,7 +435,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           <div className="mt-4">
             <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Omset</p>
             <h3 className="text-base sm:text-lg font-black text-zinc-900 mt-1">
-              Rp{totalRevenue.toLocaleString('id-ID')}
+              {loadingMetrics ? (
+                <span className="text-zinc-300 animate-pulse">Loading...</span>
+              ) : (
+                `Rp${totalRevenue.toLocaleString('id-ID')}`
+              )}
             </h3>
           </div>
         </div>
@@ -492,9 +600,10 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                 <p className="text-zinc-500 font-medium text-xs">Memuat data terbaru...</p>
               </div>
             ) : recentTxList.length === 0 ? (
-              <div className="py-6 flex flex-col items-center justify-center text-center bg-zinc-50 border border-zinc-200/50 rounded-2xl h-[160px]">
-                <ReceiptText className="h-8 w-8 text-zinc-300 mb-3" />
-                <p className="text-zinc-500 font-medium text-xs">Belum ada transaksi ditemukan.</p>
+              <div className="py-8 flex flex-col items-center justify-center text-center bg-zinc-50 border border-zinc-200/50 border-dashed rounded-3xl h-[160px]">
+                <ReceiptText className="h-10 w-10 text-zinc-300 mb-2 drop-shadow-sm" />
+                <p className="text-zinc-500 font-black text-xs uppercase tracking-widest">Belum Ada Transaksi</p>
+                <p className="text-[10px] text-zinc-400 font-medium px-6 mt-1">Data penjualan akan muncul di sini setelah transaksi dilakukan.</p>
               </div>
             ) : (
               recentTxList.slice(0, 3).map((tx) => (
@@ -538,6 +647,39 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         </div>
 
       </div>
+
+      {/* MODAL KONFIRMASI REKAP HARIAN */}
+      {showConfirmRekap && typeof document !== 'undefined' && createPortal(
+        <div style={{ zIndex: 999999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-[24px] shadow-2xl p-6 w-full max-w-sm animate-in zoom-in-95 duration-200">
+            <div className="flex justify-center mb-4">
+              <div className="h-16 w-16 bg-sky-50 text-sky-600 rounded-full flex items-center justify-center">
+                <Database className="h-8 w-8" />
+              </div>
+            </div>
+            <h3 className="text-center font-black text-lg text-zinc-900 mb-2">Proses Rekap Harian?</h3>
+            <p className="text-center text-sm text-zinc-500 mb-6 leading-relaxed">
+              Anda akan menghitung total pendapatan dari semua transaksi hari ini dan menyimpannya secara otomatis ke dalam Buku Kas. Pastikan aktivitas penjualan hari ini sudah selesai atau sepi sebelum melakukan rekap.
+            </p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setShowConfirmRekap(false)}
+                className="flex-1 py-3 px-4 rounded-xl font-bold text-zinc-700 bg-zinc-100 hover:bg-zinc-200 transition"
+              >
+                Batal
+              </button>
+              <button 
+                onClick={performTriggerRekap}
+                className="flex-1 py-3 px-4 rounded-xl font-bold border border-sky-600 text-white bg-sky-600 hover:bg-sky-700 shadow-md hover:shadow-lg transition"
+              >
+                Tutup Buku Hari Ini
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       </div>
     </div>
   );

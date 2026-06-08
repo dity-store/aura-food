@@ -103,7 +103,7 @@ export function getGASConfig(): GASConfig | null {
       console.warn("Parsing AURA_FOOD_GAS_CONFIG failed", e);
     }
   }
-  const savedUrl = localStorage.getItem('AURA_FOOD_GAS_URL') || 'https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec';
+  const savedUrl = localStorage.getItem('AURA_FOOD_GAS_URL') || 'https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec';
   const defaultConfig: GASConfig = {
     webAppUrl: savedUrl,
     sheetName: 'Data'
@@ -197,7 +197,11 @@ export async function syncMasterDataFromGAS(): Promise<void> {
     }
 
   } catch (err: any) {
-    throw new Error(`Gagal sync Master Data dari Web App: ${err.message}`);
+    let errMsg = err.message;
+    if (errMsg.includes('Failed to fetch')) {
+        errMsg = "Koneksi ke Web App gagal (Failed to fetch). Pastikan saat deploy di Apps Script Anda memilih:\n1. Execute as: Me\n2. Who has access: Anyone\ndan URL diakhiri dengan /exec";
+    }
+    throw new Error(`Gagal sync Master Data: ${errMsg}`);
   }
 }
 
@@ -236,62 +240,98 @@ export async function getTransactionsFromGAS(idCabang: string): Promise<Transact
     }));
 }
 
-export async function getAdminDashboardMetrics(idCabang: string): Promise<{
+export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr?: string): Promise<{
   totalRevenue: number;
   totalTransactions: number;
   averageTransactionValue: number;
   categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
   recentTransactions: Transaction[];
 }> {
-  const config = getGASConfig();
-  if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
+  const pesanan = await fetchUniversalDataFromGAS('Data_Pesanan');
+  const details = await fetchUniversalDataFromGAS('Data_Detail_Pesanan');
   
-  const url = new URL(config.webAppUrl);
-  url.searchParams.append('action', 'get_admin_dashboard');
-  url.searchParams.append('id_cabang', idCabang);
-  url.searchParams.append('_timestamp', Date.now().toString());
+  const getLocalDateString = (dStr: any) => {
+    try {
+      const d = new Date(dStr);
+      const yr = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const dy = String(d.getDate()).padStart(2, '0');
+      return `${yr}-${mo}-${dy}`;
+    } catch {
+      return '';
+    }
+  };
+
+  let validPesanan = pesanan.filter(p => {
+    if (idCabang !== 'All' && String(p.ID_CABANG) !== String(idCabang)) return false;
+    if (selectedDateStr) {
+      const pDate = p.TANGGAL_WAKTU || p[1];
+      if (!pDate) return false;
+      if (getLocalDateString(pDate) !== selectedDateStr) return false;
+    }
+    return true;
+  });
+
+  const totalRevenue = validPesanan.reduce((sum, p) => sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0), 0);
+  const totalTransactions = validPesanan.length;
+  const averageTransactionValue = totalTransactions ? totalRevenue / totalTransactions : 0;
   
-  const res = await fetch(url.toString(), { redirect: 'follow' });
-  if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+  const validPesananIds = new Set(validPesanan.map(p => String(p.ID_PESANAN || p[0])));
+
+  const categorySales = { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 };
+  details.forEach(d => {
+    if (idCabang !== 'All' && String(d.ID_CABANG) !== String(idCabang)) return;
+    const dPesananId = String(d.ID_PESANAN || d[0]);
+    if (selectedDateStr && !validPesananIds.has(dPesananId)) return;
+
+    const cat = String(d.KATEGORI || d.Kategori || d[3] || '').toUpperCase();
+    const qty = Number(d.JUMLAH || d.Jumlah || d[4] || 0);
+    if (cat.includes('MAKANAN')) categorySales.Makanan += qty;
+    if (cat.includes('MINUMAN')) categorySales.Minuman += qty;
+    if (cat.includes('PASTA')) categorySales.Pasta += qty;
+    if (cat.includes('SPECIAL')) categorySales.Special += qty;
+  });
+
+  // Most recent first
+  validPesanan.sort((a, b) => new Date(b.TANGGAL_WAKTU || b[1] || 0).getTime() - new Date(a.TANGGAL_WAKTU || a[1] || 0).getTime());
+  const recentRaw = validPesanan.slice(0, 50); // limit 50
   
-  const result = await res.json();
-  if (result.status !== 'success') throw new Error(result.message || 'Gagal mengambil data.');
-  
-  const fetchedData = result.data || {};
-  
-  // Map recent transactions safely to Transaction model format
-  const recentTransactionsMapped = (fetchedData.recentTransactions || []).map((item: any) => ({
-    id: item.ID_PESANAN,
+  const recentTransactionsMapped = recentRaw.map(p => ({
+    id: p.ID_PESANAN || p[0],
     pesanan: {
-      ID_PESANAN: item.ID_PESANAN,
-      TANGGAL_WAKTU: item.TANGGAL_WAKTU,
-      ID_CABANG: item.ID_CABANG,
-      TOTAL_TAGIHAN: item.TOTAL_TAGIHAN,
-      METODE_BAYAR: item.METODE_BAYAR
+      ID_PESANAN: p.ID_PESANAN || p[0],
+      TANGGAL_WAKTU: p.TANGGAL_WAKTU || p[1],
+      ID_CABANG: p.ID_CABANG || p[2],
+      TOTAL_TAGIHAN: Number(p.TOTAL_TAGIHAN || p[3] || 0),
+      METODE_BAYAR: p.METODE_BAYAR || p[4]
     },
-    detail: item.detail || [],
-    status: 'synced',
-    timestamp: item.TANGGAL_WAKTU,
-    paymentMethod: item.METODE_BAYAR,
-    totalAmount: Number(item.TOTAL_TAGIHAN),
-    cabang: item.ID_CABANG
+    detail: details.filter(d => (d.ID_PESANAN || d[0]) === (p.ID_PESANAN || p[0])),
+    status: 'synced' as 'synced',
+    timestamp: p.TANGGAL_WAKTU || p[1],
+    paymentMethod: p.METODE_BAYAR || p[4],
+    totalAmount: Number(p.TOTAL_TAGIHAN || p[3] || 0),
+    cabang: p.ID_CABANG || p[2]
   }));
 
   return {
-    totalRevenue: Number(fetchedData.totalRevenue || 0),
-    totalTransactions: Number(fetchedData.totalTransactions || 0),
-    averageTransactionValue: Number(fetchedData.averageTransactionValue || 0),
-    categorySales: {
-      Makanan: Number(fetchedData.categorySales?.Makanan || 0),
-      Minuman: Number(fetchedData.categorySales?.Minuman || 0),
-      Pasta: Number(fetchedData.categorySales?.Pasta || 0),
-      Special: Number(fetchedData.categorySales?.Special || 0),
-    },
+    totalRevenue,
+    totalTransactions,
+    averageTransactionValue,
+    categorySales,
     recentTransactions: recentTransactionsMapped
   };
 }
 
-export async function getAdminReportsData(idCabang: string): Promise<{
+export async function getAdminReportsData(
+  idCabang: string,
+  periode: string,
+  jenisData: string,
+  tanggal: string,
+  bulan: number,
+  tahun: number,
+  kuartal: string,
+  semester: string
+): Promise<{
   pemasukan: number;
   pengeluaran: number;
   saldoBersih: number;
@@ -303,8 +343,15 @@ export async function getAdminReportsData(idCabang: string): Promise<{
   const url = new URL(config.webAppUrl);
   url.searchParams.append('action', 'get_admin_reports');
   url.searchParams.append('id_cabang', idCabang);
+  url.searchParams.append('periode', periode);
+  url.searchParams.append('jenis_data', jenisData);
+  url.searchParams.append('tanggal', tanggal);
+  url.searchParams.append('bulan', bulan.toString());
+  url.searchParams.append('tahun', tahun.toString());
+  url.searchParams.append('kuartal', kuartal);
+  url.searchParams.append('semester', semester);
   url.searchParams.append('_timestamp', Date.now().toString());
-  
+
   const res = await fetch(url.toString(), { redirect: 'follow' });
   if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
   
@@ -477,5 +524,93 @@ export async function removeFromSyncQueue(id: string): Promise<void> {
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+}
+
+export async function triggerGASSyncRekapHarian(): Promise<boolean> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
+  
+  const url = new URL(config.webAppUrl);
+  url.searchParams.append('action', 'trigger_rekap_harian');
+  url.searchParams.append('_timestamp', Date.now().toString());
+  
+  const res = await fetch(url.toString(), { redirect: 'follow' });
+  if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+  
+  const result = await res.json();
+  if (result.status !== 'success') throw new Error(result.message || 'Gagal trigger rekap harian.');
+  
+  return true;
+}
+
+export async function postBukuKasToGAS(payload: any): Promise<void> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi GAS belum diatur.');
+  
+  const res = await fetch(config.webAppUrl, {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'POST_BUKU_KAS', payload }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  });
+  
+  const result = await res.json();
+  if (result.status !== 'success') throw new Error(result.message || 'Gagal menyimpan transaksi kas');
+}
+
+export async function postMasterDataToGAS(type: string, item: any): Promise<void> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi GAS belum diatur.');
+  
+  const res = await fetch(config.webAppUrl, {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'POST_MASTER_DATA', type, item }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  });
+
+  const result = await res.json();
+  if (result.status !== 'success') throw new Error(result.message || `Gagal menyimpan master data ${type}`);
+}
+
+export async function postUniversalDataToGAS(mode: string, sheetName: string, idColumn: string | null, idValue: string | null, data: any): Promise<void> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi GAS belum diatur.');
+  const payload: any = { mode, sheetName, data };
+  if (idColumn) payload.idColumn = idColumn;
+  if (idValue) payload.idValue = idValue;
+  if (data && data.idValues) payload.idValues = data.idValues;
+  
+  const res = await fetch(config.webAppUrl, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  });
+
+  const result = await res.json();
+  if (result.status !== 'success') throw new Error(result.message || `Gagal operasi ${mode} untuk ${sheetName}`);
+}
+
+export async function fetchUniversalDataFromGAS(sheetName: string): Promise<any[]> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) return [];
+  
+  try {
+    const urlFull = new URL(config.webAppUrl);
+    urlFull.searchParams.append('action', 'get_data_sheet');
+    urlFull.searchParams.append('sheet_name', sheetName);
+    urlFull.searchParams.append('_timestamp', Date.now().toString());
+
+    const res = await fetch(urlFull.toString(), { redirect: 'follow' });
+    if (res.ok) {
+       const json = await res.json();
+       if (json.status === 'success') {
+         return Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
+       }
+       return Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
+    }
+    return [];
+  } catch(e) {
+    console.error("fetchUniversalDataFromGAS err:", e);
+    return [];
+  }
 }
 

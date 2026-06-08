@@ -60,7 +60,8 @@ export default function App() {
   const [historyBranchFilter, setHistoryBranchFilter] = useState<string>('');
   const [posInitialCreateMode, setPosInitialCreateMode] = useState<boolean>(false);
 
-  const isFullScreenTab = isCheckoutPageActive || activeTab === 'history';
+  const [isAdminModuleActive, setIsAdminModuleActive] = useState<boolean>(false);
+  const isFullScreenTab = isCheckoutPageActive || activeTab === 'history' || (activeTab === 'admin' && isAdminModuleActive);
 
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -70,8 +71,8 @@ export default function App() {
   const [gasUrl, setGasUrl] = useState<string>(() => {
     const saved = localStorage.getItem('AURA_FOOD_GAS_URL');
     if (!saved) {
-      localStorage.setItem('AURA_FOOD_GAS_URL', 'https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec');
-      return 'https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec';
+      localStorage.setItem('AURA_FOOD_GAS_URL', 'https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec');
+      return 'https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec';
     }
     return saved;
   });
@@ -246,6 +247,31 @@ export default function App() {
 
   const [printingStatus, setPrintingStatus] = useState<'idle' | 'printing' | 'success'>('idle');
 
+  // One-time migration to new GAS URL
+  useEffect(() => {
+    const oldUrl = 'https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec';
+    const newUrl = 'https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec';
+    
+    if (gasUrl === oldUrl) {
+      console.log("Migrating to new GAS URL...");
+      localStorage.setItem('AURA_FOOD_GAS_URL', newUrl);
+      
+      const cfgString = localStorage.getItem('AURA_FOOD_GAS_CONFIG');
+      if (cfgString) {
+        try {
+          const cfg = JSON.parse(cfgString);
+          if (cfg.webAppUrl === oldUrl) {
+            cfg.webAppUrl = newUrl;
+            localStorage.setItem('AURA_FOOD_GAS_CONFIG', JSON.stringify(cfg));
+          }
+        } catch (e) {}
+      }
+      
+      setGasUrl(newUrl);
+      setDialogGasUrl(newUrl);
+    }
+  }, [gasUrl]);
+
   useEffect(() => {
     // Seed and Load initial Master Data
     const loadMasterData = async () => {
@@ -405,11 +431,20 @@ export default function App() {
                setLoginPassword('');
                setIsCheckoutPageActive(false);
 
-               // Since local database may be completely cleared/empty, sync the master data (menu/cat/varians) immediately
-               try {
-                  await syncMasterDataFromGAS();
-               } catch (syncErr) {
-                  console.warn("Gagal sinkronisasi data master setelah login online sukses:", syncErr);
+               // Let's optimize: don't block if local DB already has catalog menu items
+               const localData = await getMasterData();
+               const hasLocalData = localData && localData.menu && localData.menu.length > 0;
+               
+               if (hasLocalData) {
+                  // Non-blocking background sync for speed
+                  syncMasterDataFromGAS().then(() => handleReloadData()).catch(err => console.warn(err));
+               } else {
+                  // Block only for first-time login
+                  try {
+                     await syncMasterDataFromGAS();
+                  } catch (syncErr) {
+                     console.warn("Gagal sinkronisasi data master setelah login online sukses:", syncErr);
+                  }
                }
 
                handleReloadData();
@@ -437,7 +472,7 @@ export default function App() {
       } else if (!navigator.onLine) {
          setLoginError(`Cabang "${cleanBranch}" belum terdaftar di sistem lokal. Sambungkan ke internet untuk menyinkronkan data.`);
       } else {
-         setLoginError(`Cabang "${cleanBranch}" tidak terdaftar di sistem spreadsheets.`);
+         setLoginError(`Cabang "${cleanBranch}" tidak terdaftar di Sistem Pusat.`);
       }
 
     } catch (err: any) {
@@ -464,14 +499,19 @@ export default function App() {
 
   const disconnectGoogleSheet = () => setShowDisconnectModal(true);
   const executeDisconnect = () => {
-    localStorage.setItem('AURA_FOOD_GAS_URL', 'https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec');
-    setGasUrl('https://script.google.com/macros/s/AKfycbzlVeWkqH3aj1JNc0XHIywMtXOG75arHK4gFn-_VKD6iXciBZAaQBiIsB4tTGI_lzLi/exec');
+    localStorage.setItem('AURA_FOOD_GAS_URL', 'https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec');
+    setGasUrl('https://script.google.com/macros/s/AKfycbyQbjH6133fuppW7ercx1bAJwX4P1J37VBaV-JY6Z3gDnWLsqzxrYuEmCngS-zIXGjW/exec');
     handleReloadData();
     setShowDisconnectModal(false);
   };
 
+  // Scroll to top when tab changes
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [activeTab]);
+
   return (
-    <div className="min-h-screen bg-neutral-50 text-zinc-950 font-sans flex flex-col justify-between pb-24 md:pb-28">
+    <div className={`min-h-screen bg-neutral-50 text-zinc-950 font-sans flex flex-col justify-between ${isFullScreenTab ? 'pb-0' : 'pb-24'}`}>
       
       {/* EXIT WARNING TOAST */}
       {exitWarning && (
@@ -746,20 +786,22 @@ export default function App() {
             )}
 
             {activeTab === 'admin' && (
-              <div className="space-y-6 animate-fade-in">
-                <AdminPanel onRefreshPOSCatalog={handleReloadData} />
+              <div className={isAdminModuleActive ? "flex-grow flex flex-col bg-neutral-50" : "space-y-6 animate-fade-in"}>
+                <AdminPanel onRefreshPOSCatalog={handleReloadData} onModuleActiveChange={setIsAdminModuleActive} />
                 
-                <div className="bg-red-50 border border-red-100 p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-left">
-                  <div>
-                    <h4 className="text-xs font-bold text-red-900 uppercase tracking-widest">Status Koneksi Database</h4>
+                {!isAdminModuleActive && (
+                  <div className="bg-red-50 border border-red-100 p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-left">
+                    <div>
+                      <h4 className="text-xs font-bold text-red-900 uppercase tracking-widest">Status Koneksi Database</h4>
+                    </div>
+                    <button
+                      onClick={disconnectGoogleSheet}
+                      className="bg-red-800 hover:bg-red-900 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer shrink-0 active:scale-95 shadow-sm"
+                    >
+                      Putuskan Hubungan Database
+                    </button>
                   </div>
-                  <button
-                    onClick={disconnectGoogleSheet}
-                    className="bg-red-800 hover:bg-red-900 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer shrink-0 active:scale-95 shadow-sm"
-                  >
-                    Putuskan Hubungan Database
-                  </button>
-                </div>
+                )}
               </div>
             )}
 
@@ -809,7 +851,7 @@ export default function App() {
                                   {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
                                 </div>
                                 <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
-                                  Rp{(item.HARGA * item.QTY).toLocaleString('id-ID')}
+                                  Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
                                 </div>
                               </div>
                             ))}
@@ -1073,7 +1115,7 @@ export default function App() {
                   <CheckCircle2 className="h-4.5 w-4.5 text-emerald-700 shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
                     <p className="font-extrabold text-[11px] uppercase tracking-wide">Koneksi & Sinkronisasi Sempurna!</p>
-                    <p className="text-[10px] leading-normal text-emerald-700/90 font-medium">Data cabang dan inventaris menu dari spreadsheet telah disinkronisasikan ke dalam browser Anda. Anda sudah bisa login menggunakan password terbaru.</p>
+                    <p className="text-[10px] leading-normal text-emerald-700/90 font-medium">Data cabang dan inventaris menu dari Sistem Pusat telah disinkronisasikan ke dalam browser Anda. Anda sudah bisa login menggunakan password terbaru.</p>
                   </div>
                 </div>
               )}
@@ -1086,7 +1128,7 @@ export default function App() {
                     <p className="font-extrabold text-[11px] uppercase tracking-wide text-red-800">Sinkronisasi Gagal</p>
                     <p className="text-[10px] leading-normal text-red-950/80 font-medium">Koneksi tidak dapat terjalin ke Google Apps Script Web App. Rekor Rekomendasi:</p>
                     <ul className="list-disc list-inside mt-1 space-y-1 text-[10px] text-zinc-650 pl-1 font-medium">
-                      <li>Buka Google Sheets, cek apakah menu <strong>Extensions &gt; Apps Script</strong> sudah dideploy dengan benar.</li>
+                      <li>Buka berkas basis data Sistem Pusat, cek apakah menu <strong>Extensions &gt; Apps Script</strong> sudah dideploy dengan benar.</li>
                       <li>Di setelan pengedaran (Deploy Web App), pastikan opsi <strong>Execute as</strong> diset sebagai "Me" (Anda) dan opsi <strong>Who has access</strong> diset sebagai "Anyone" (Siapapun, bahkan anonim).</li>
                       <li>Periksa kembali salinan tautan Web App URL di atas (harus berakhiran <code>/exec</code>).</li>
                     </ul>

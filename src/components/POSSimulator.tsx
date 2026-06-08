@@ -317,8 +317,8 @@ export default function POSSimulator({
     // Determine variants based on whether it's a NestedMenu or flat Menu
     const menuVarians = menu.varians || menu.varian || menu.Varian;
     const variants = menuVarians 
-      ? menuVarians.filter((v: any) => v.STATUS === 'AKTIF')
-      : (masterData?.varian || []).filter(v => v.ID_MENU === menu.ID_MENU && v.STATUS === 'AKTIF');
+      ? menuVarians.filter((v: any) => v.STATUS === 'AKTIF' || v.STATUS === 'Tersedia')
+      : (masterData?.varian || []).filter(v => v.ID_MENU === menu.ID_MENU && (v.STATUS === 'AKTIF' || v.STATUS === 'Tersedia'));
     
     if (variants.length === 1) {
       // Auto-add if only one variant
@@ -554,8 +554,8 @@ export default function POSSimulator({
 
   function renderCatalogGrid() {
     return (
-    <div className="space-y-4">
-      <div className="bg-white p-4 border border-zinc-200/80 shadow-sm rounded-3xl space-y-3">
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="bg-white p-4 border border-zinc-200/80 shadow-sm rounded-3xl space-y-3 shrink-0 mb-4">
         <div className="relative">
           <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-zinc-400" />
           <input
@@ -591,12 +591,12 @@ export default function POSSimulator({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-24 md:pb-6 overflow-y-auto max-h-[80vh] scrollbar-thin rounded-2xl px-1" id="products-grid">
+      <div className="flex-1 min-h-0 grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-24 md:pb-6 overflow-y-auto scrollbar-thin rounded-2xl px-1" id="products-grid">
         {displayMenus.map((p) => {
           const m = p.menu as any;
           const varianList = m.varians || m.varian || m.Varian || [];
           const hasNoVariants = !varianList || varianList.length === 0;
-          const isMenuInactive = varianList && varianList.length > 0 && !varianList.some((v: any) => v.STATUS === 'AKTIF');
+          const isMenuInactive = varianList && varianList.length > 0 && !varianList.some((v: any) => v.STATUS === 'AKTIF' || v.STATUS === 'Tersedia');
           const isDisabled = hasNoVariants || isMenuInactive;
           
           return (
@@ -764,8 +764,8 @@ export default function POSSimulator({
             </div>
           </div>
 
-          <div className="hidden md:block w-[380px] xl:w-[480px] border-l border-zinc-200 bg-white p-5 overflow-y-auto shrink-0 shadow-[-10px_0_20px_rgba(0,0,0,0.02)] z-10">
-            <div className="mb-4 flex items-center justify-between">
+          <div className="hidden md:flex flex-col w-[380px] xl:w-[480px] border-l border-zinc-200 bg-white p-5 overflow-hidden shrink-0 shadow-[-10px_0_20px_rgba(0,0,0,0.02)] z-10">
+            <div className="mb-4 flex items-center justify-between shrink-0">
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-wide">
                   Katalog Menu
                 </h3>
@@ -779,7 +779,9 @@ export default function POSSimulator({
                   </button>
                 )}
             </div>
-            {renderCatalogGrid()}
+            <div className="flex-1 overflow-hidden min-h-0">
+              {renderCatalogGrid()}
+            </div>
           </div>
         </div>
 
@@ -829,7 +831,7 @@ export default function POSSimulator({
                   </button>
                 </div>
               </div>
-              <div className="p-4 flex-1 overflow-hidden pb-16">
+              <div className="p-4 flex-1 overflow-hidden min-h-0 pb-16">
                 {renderCatalogGrid()}
               </div>
             </div>
@@ -1025,7 +1027,7 @@ export default function POSSimulator({
                 </button>
               </div>
               
-              <div className="p-5 overflow-y-auto w-full">
+              <div className="p-5 overflow-y-auto w-full min-h-0">
                 <div className="flex items-center gap-3 mb-5 pb-4 border-b border-dashed border-zinc-200">
                     <div className="h-10 w-10 rounded-xl bg-red-50 text-red-750 flex items-center justify-center shrink-0 border border-red-100">
                       <UtensilsCrossed className="h-5 w-5" />
@@ -1037,7 +1039,7 @@ export default function POSSimulator({
 
                 <div className="space-y-3">
                   {/* @ts-ignore */}
-                  {(selectedMenuForVarian.varians || masterData?.varian.filter(v => v.ID_MENU === selectedMenuForVarian.ID_MENU && v.STATUS === 'AKTIF') || []).map((v: any) => (
+                  {(selectedMenuForVarian.varians || masterData?.varian.filter(v => v.ID_MENU === selectedMenuForVarian.ID_MENU && (v.STATUS === 'AKTIF' || v.STATUS === 'Tersedia')) || []).map((v: any) => (
                     <button 
                       key={v.ID_VARIAN}
                       onClick={() => {

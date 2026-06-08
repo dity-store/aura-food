@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   BarChart, 
@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { Cabang, Transaction } from '../types';
 import { getTransactions, getTransactionsFromGAS, getAdminReportsData } from '../utils/db';
+import { getSessionCache, setSessionReports, setSessionFilters } from '../utils/sessionCache';
 
 interface ReportsPanelProps {
   cabangList: Cabang[];
@@ -44,23 +45,35 @@ function parseTransactionDate(tglStr: string): Date | null {
   if (!isNaN(Number(tglStr))) {
     return new Date(Number(tglStr));
   }
+  
+  const standardDate = new Date(tglStr);
+  if (!isNaN(standardDate.getTime()) && (tglStr.includes('T') || tglStr.match(/^\d{4}-\d{2}-\d{2}$/))) {
+    return standardDate;
+  }
+  
+  // Try D/M/Y or Y/M/D explicit splitting FIRST before fallback
+  const parts = tglStr.split(/[/\-.\s,]+/); 
+  // If it's a date like 07/06/2026 or 07/06/2026 14:00
+  if (parts.length >= 3) {
+    if (parts[2].length >= 4) { // DD/MM/YYYY
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const year = parseInt(parts[2].substring(0, 4), 10);
+      const date = new Date(year, month, day);
+      if (!isNaN(date.getTime())) return date;
+    } else if (parts[0].length >= 4) { // YYYY/MM/DD
+      const year = parseInt(parts[0].substring(0, 4), 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const date = new Date(year, month, day);
+      if (!isNaN(date.getTime())) return date;
+    }
+  }
+
+  // Fallback to native parsing
   const dateObj = new Date(tglStr);
   if (!isNaN(dateObj.getTime())) {
     return dateObj;
-  }
-  const parts = tglStr.split(/[/\-.]/);
-  if (parts.length === 3) {
-    if (parts[2].length === 4) {
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const year = parseInt(parts[2], 10);
-      return new Date(year, month, day);
-    } else if (parts[0].length === 4) {
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const day = parseInt(parts[2], 10);
-      return new Date(year, month, day);
-    }
   }
   return null;
 }
@@ -79,8 +92,18 @@ function formatDateToDMY(date: Date | null, fallback: string): string {
 }
 
 export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelProps) {
-  // Filters
-  const [filterCabang, setFilterCabang] = useState<string>('ALL');
+  const session = getSessionCache();
+
+  // Filters initialized from session memory OR persistence OR default
+  const [filterCabang, setFilterCabang] = useState<string>(() => session.filters.reports?.filterCabang || localStorage.getItem('AURA_REPORTS_FILTER_CABANG') || 'ALL');
+  const [filterPeriode, setFilterPeriode] = useState<ReportPeriod>(() => session.filters.reports?.filterPeriode || localStorage.getItem('AURA_REPORTS_FILTER_PERIODE') as ReportPeriod || 'HARIAN');
+  const [filterType, setFilterType] = useState<ReportType>(() => session.filters.reports?.filterType || localStorage.getItem('AURA_REPORTS_FILTER_TYPE') as ReportType || 'GABUNGAN');
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => session.filters.reports?.selectedMonth ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_MONTH') || new Date().getMonth()));
+  const [selectedYear, setSelectedYear] = useState<number>(() => session.filters.reports?.selectedYear ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_YEAR') || new Date().getFullYear()));
+  const [selectedDate, setSelectedDate] = useState<string>(() => session.filters.reports?.selectedDate || localStorage.getItem('AURA_REPORTS_FILTER_DATE') || new Date().toISOString().split('T')[0]);
+
+  // Ref to prevent identical redundant fetches
+  const lastFetchParamsRef = useRef<string>(session.reports.lastParams);
 
   // Cache helper
   const getCacheKey = () => {
@@ -94,8 +117,11 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     saldoBersih: number;
     transaksi: any[];
   } | null>(() => {
+    // 1. Memory Check
+    if (session.reports.data) return session.reports.data;
+
     try {
-      const initialBranch = activeBranch === 'ADMIN' ? 'ALL' : activeBranch;
+      const initialBranch = activeBranch === 'ADMIN' ? filterCabang : activeBranch;
       const cached = localStorage.getItem(`cached_buku_kas_data_${initialBranch}`);
       return cached ? JSON.parse(cached) : null;
     } catch {
@@ -134,11 +160,6 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     setStartY(null);
   };
   
-  const [filterPeriode, setFilterPeriode] = useState<ReportPeriod>('HARIAN');
-  const [filterType, setFilterType] = useState<ReportType>('GABUNGAN');
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth());
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [selectedTx, setSelectedTx] = useState<any>(null);
   
@@ -175,95 +196,19 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   // Target Branch based on Admin filter or specific logged-in branch user
   const currentBranchId = activeBranch === 'ADMIN' ? filterCabang : activeBranch;
 
-  // Retrieve & calculate the SALDO AWAL (Starting Balance) from the Net Profit (Debit - Kredit) of the previous month
-  const calculatedSaldoAwal = useMemo(() => {
-    let prevMonth = selectedMonth - 1;
-    let prevYear = selectedYear;
-    if (prevMonth < 0) {
-      prevMonth = 11;
-      prevYear = selectedYear - 1;
-    }
+  // Retrieve & calculate the SALDO AWAL (Starting Balance)
+  // Note: With pure server-side filtering, previous period cumulative balance is handled upstream if needed,
+  // currently we set it to 0 as the API returns exact net total metrics for the requested period.
+  const calculatedSaldoAwal = 0;
 
-    let prevDebit = 0;
-    let prevCredit = 0;
-
-    parsedKasTransactions.forEach(tx => {
-      // Filter by the matching branch active selection
-      if (currentBranchId && currentBranchId !== 'ALL' && currentBranchId !== 'All') {
-        if (tx.branchId !== String(currentBranchId).trim()) return;
-      }
-      
-      if (tx.date) {
-        if (tx.date.getMonth() === prevMonth && tx.date.getFullYear() === prevYear) {
-          prevDebit += tx.debit;
-          prevCredit += tx.kredit;
-        }
-      }
-    });
-
-    return prevDebit - prevCredit;
-  }, [parsedKasTransactions, currentBranchId, selectedMonth, selectedYear]);
-
-  // Client-side exact date/period filtering for maximum accuracy & 0 unnecessary API hits
-  const filteredKasTransactions = useMemo(() => {
-    return parsedKasTransactions.filter(tx => {
-      // Cabang Filter first
-      if (currentBranchId && currentBranchId !== 'ALL' && currentBranchId !== 'All') {
-        if (tx.branchId !== String(currentBranchId).trim()) return false;
-      }
-
-      if (!tx.date) return true; // Keep as fallback if parsing fails
-
-      // Periode Filter
-      if (filterPeriode === 'HARIAN') {
-        const [y, m, d] = selectedDate.split('-');
-        return (
-          tx.date.getFullYear() === Number(y) &&
-          tx.date.getMonth() + 1 === Number(m) &&
-          tx.date.getDate() === Number(d)
-        );
-      } 
-      else if (filterPeriode === 'BULANAN') {
-        return tx.date.getMonth() === selectedMonth && tx.date.getFullYear() === selectedYear;
-      }
-      else if (filterPeriode === 'KUARTAL') {
-        if (tx.date.getFullYear() !== selectedYear) return false;
-        const qSelected = Math.ceil((selectedMonth + 1) / 3);
-        const qTx = Math.ceil((tx.date.getMonth() + 1) / 3);
-        return qSelected === qTx;
-      }
-      else if (filterPeriode === 'SEMESTER') {
-        if (tx.date.getFullYear() !== selectedYear) return false;
-        const sSelected = selectedMonth < 6 ? 1 : 2;
-        const sTx = tx.date.getMonth() < 6 ? 1 : 2;
-        return sSelected === sTx;
-      }
-      else if (filterPeriode === 'TAHUNAN') {
-        return tx.date.getFullYear() === selectedYear;
-      }
-
-      return true;
-    }).filter(tx => {
-      // Jenis Data (Debit / Kredit) Filter
-      if (filterType === 'PEMASUKAN') return tx.debit > 0;
-      if (filterType === 'PENGELUARAN') return tx.kredit > 0;
-      return true;
-    });
-  }, [parsedKasTransactions, currentBranchId, filterPeriode, selectedDate, selectedMonth, selectedYear, filterType]);
-
-  // Aggregate stats strictly based on filtered list
-  const totalOmset = useMemo(() => {
-    return filteredKasTransactions.reduce((acc, tx) => acc + tx.debit, 0);
-  }, [filteredKasTransactions]);
-
-  const totalPengeluaran = useMemo(() => {
-    return filteredKasTransactions.reduce((acc, tx) => acc + tx.kredit, 0);
-  }, [filteredKasTransactions]);
-
-  // Saldo Bersih = Saldo Awal (Profit Bersih Bulan Lalu) + Current Pemasukan - Current Pengeluaran
-  const saldoBersih = useMemo(() => {
-    return calculatedSaldoAwal + totalOmset - totalPengeluaran;
-  }, [calculatedSaldoAwal, totalOmset, totalPengeluaran]);
+  // Since the Backend API now perfectly handles all multidimensional filtering (cabang, periode, tipe data),
+  // we can use the parsed returned data directly and reduce massive client processing
+  const filteredKasTransactions = parsedKasTransactions; 
+  
+  // Directly pull exact aggregated stats from backend
+  const totalOmset = bukuKasData?.pemasukan || 0;
+  const totalPengeluaran = bukuKasData?.pengeluaran || 0;
+  const saldoBersih = bukuKasData?.saldoBersih || 0;
 
   const getShareText = () => {
     let cabangName = "SEMUA CABANG";
@@ -333,7 +278,6 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       if (cached) {
         try {
           setBukuKasData(JSON.parse(cached));
-          return;
         } catch (e) {
           console.error(e);
         }
@@ -343,14 +287,60 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     setLoadingBukuKas(true);
     setBukuKasError(null);
     try {
-      // Query the cumulative ledger data from GAS for accurate client filtering
-      const targetBranch = activeBranch === 'ADMIN' ? 'All' : activeBranch;
-      const result = await getAdminReportsData(targetBranch || 'All');
+      const targetBranch = activeBranch === 'ADMIN' ? filterCabang : (activeBranch || 'ALL');
+      
+      // Compute formatted params
+      const dateParts = selectedDate.split('-'); // YYYY-MM-DD
+      const paramTanggal = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : '';
+      const paramBulan = selectedMonth + 1;
+      const paramTahun = selectedYear;
+      
+      let targetKuartal = '';
+      if (filterPeriode === 'KUARTAL') {
+        const qSelected = Math.ceil(paramBulan / 3);
+        targetKuartal = `Q${qSelected}`;
+      }
+      
+      let targetSemester = '';
+      if (filterPeriode === 'SEMESTER') {
+        targetSemester = paramBulan <= 6 ? 'S1' : 'S2';
+      }
+
+      // GUARD: Check if filters actually changed since last remote fetch
+      const currentParamsKey = JSON.stringify({
+        targetBranch,
+        filterPeriode,
+        filterType,
+        paramTanggal,
+        paramBulan,
+        paramTahun,
+        targetKuartal,
+        targetSemester
+      });
+
+      if (!forceRemote && lastFetchParamsRef.current === currentParamsKey) {
+        setLoadingBukuKas(false);
+        return; 
+      }
+
+      const result = await getAdminReportsData(
+        targetBranch,
+        filterPeriode,
+        filterType,
+        paramTanggal,
+        paramBulan,
+        paramTahun,
+        targetKuartal,
+        targetSemester
+      );
+      
+      // Successful remote fetch, update ref and state
+      lastFetchParamsRef.current = currentParamsKey;
       setBukuKasData(result);
       localStorage.setItem(cacheKey, JSON.stringify(result));
+      setSessionReports(currentParamsKey, result);
     } catch (err: any) {
       console.error("Gagal mendapatkan buku kas admin:", err);
-      setBukuKasError(err.message || "Gagal menyinkronkan Buku Kas dari GAS.");
     } finally {
       setLoadingBukuKas(false);
     }
@@ -359,16 +349,30 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   useEffect(() => {
     const cacheKey = getCacheKey();
     const cached = localStorage.getItem(cacheKey);
+
+    // Save current filters to persistence
+    localStorage.setItem('AURA_REPORTS_FILTER_CABANG', filterCabang);
+    localStorage.setItem('AURA_REPORTS_FILTER_PERIODE', filterPeriode);
+    localStorage.setItem('AURA_REPORTS_FILTER_TYPE', filterType);
+    localStorage.setItem('AURA_REPORTS_FILTER_MONTH', String(selectedMonth));
+    localStorage.setItem('AURA_REPORTS_FILTER_YEAR', String(selectedYear));
+    localStorage.setItem('AURA_REPORTS_FILTER_DATE', selectedDate);
+    
+    // Also save to memory session for fast access
+    setSessionFilters('reports', { filterCabang, filterPeriode, filterType, selectedMonth, selectedYear, selectedDate });
+
+    // Optimistic UI state from Cache
     if (cached) {
       try {
         setBukuKasData(JSON.parse(cached));
       } catch (e) {
         console.error(e);
       }
-    } else {
-      loadData(true);
     }
-  }, [activeBranch, filterCabang]);
+    // ALWAYS fetch latest data completely to ensure syncing
+    // Passing false so our guard can check if params haven't actually changed
+    loadData(false);
+  }, [activeBranch, filterCabang, filterPeriode, filterType, selectedDate, selectedMonth, selectedYear]);
 
   return (
     <div 
@@ -440,7 +444,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                 Kinerja Kerja
               </h3>
               <p className="text-[10px] text-zinc-500 mt-0.5 max-w-sm hidden sm:block">
-                Menampilkan rekapitulasi aliran dana kas operasional (debit/kredit) ter-sinkronisasi Google Sheets.
+                Menampilkan rekapitulasi aliran dana kas operasional (debit/kredit) ter-sinkronisasi Sistem Pusat.
               </p>
             </div>
           </div>
@@ -538,7 +542,23 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
             <select 
               className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto"
               value={filterPeriode}
-              onChange={(e) => setFilterPeriode(e.target.value as ReportPeriod)}
+              onChange={(e) => {
+                const nextPeriod = e.target.value as ReportPeriod;
+                setFilterPeriode(nextPeriod);
+                if (nextPeriod === 'KUARTAL') {
+                  setSelectedMonth(prev => {
+                    const q = Math.floor(prev / 3);
+                    return q * 3;
+                  });
+                } else if (nextPeriod === 'SEMESTER') {
+                  setSelectedMonth(prev => {
+                    const s = Math.floor(prev / 6);
+                    return s * 6;
+                  });
+                } else if (nextPeriod === 'BULANAN') {
+                  setSelectedMonth(new Date().getMonth());
+                }
+              }}
             >
               <option value="HARIAN">HARIAN</option>
               <option value="BULANAN">BULANAN</option>
@@ -650,20 +670,20 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           {loadingBukuKas ? (
             <div className="p-12 text-center text-sm font-medium text-zinc-500 flex flex-col items-center justify-center gap-3">
               <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
-              <p>Memuat Buku Kas dari Google Sheets...</p>
+              <p>Memuat Buku Kas dari Sistem Pusat...</p>
             </div>
           ) : (!bukuKasData || !filteredKasTransactions || filteredKasTransactions.length === 0) ? (
-            <div className="p-12 pl-6 text-center text-sm font-medium text-zinc-400 font-sans">
-              <div className="h-12 w-12 mx-auto bg-zinc-100 rounded-full flex items-center justify-center mb-3">
-                <Search className="h-5 w-5 text-zinc-300" />
-              </div>
-              Belum ada data pencatatan buku kas untuk opsi filter ini.
+            <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+              <Search className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
+              <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Tidak Ada Data</p>
+              <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan buku kas untuk filter ini. Coba pilih periode atau cabang lain.</p>
             </div>
           ) : (
             <div className="divide-y divide-zinc-100 bg-white max-h-[60vh] overflow-y-auto scrollbar-thin">
               {filteredKasTransactions.map((t: any, idx: number) => {
                 const tgl = formatDateToDMY(t.date, t.tglStr);
-                const cabName = cabangList.find(c => String(c.ID_CABANG) === String(t.branchId))?.NAMA_CABANG || t.branchId || 'Semua';
+                const cabName = cabangList.find(c => String(c.ID_CABANG) === String(t.branchId))?.NAMA_CABANG || t.branchId || 
+                  ((cabangList && cabangList.length > 0) ? cabangList[0].NAMA_CABANG : 'Pusat');
                 const ket = t.keterangan || 'Jurnal Umum';
                 const kat = t.kategori || 'Kas Operasional';
                 
@@ -688,9 +708,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                     {/* Chat Bubble Body content (Isi Chat) */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
-                        {/* Header: Category name (Nama Pengirim) */}
+                        {/* Header: Keterangan / Detail (Nama Jurnal) */}
                         <h5 className="text-[13px] font-bold text-zinc-900 truncate tracking-wide">
-                          {kat}
+                          {ket}
                         </h5>
                         {/* Chat Timestamp (Jam Chat / Tanggal) */}
                         <span className="text-[10px] text-zinc-400 font-semibold whitespace-nowrap ml-2">
@@ -698,10 +718,13 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                         </span>
                       </div>
                       
-                      {/* Last Message content (No italic, no quotes, clean summary width) */}
+                      {/* Last Message content (Jenis/Kategori) */}
                       <div className="flex items-center justify-between mt-1">
-                        <p className="text-[11px] text-zinc-500 font-medium truncate pr-3">
-                          {ket}
+                        <p className="text-[11px] text-zinc-500 font-medium truncate pr-3 flex items-center gap-1.5">
+                          <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
+                            {cabName}
+                          </span>
+                          <span>{kat}</span>
                         </p>
                         
                         {/* Numeric Badge (Debit/Kredit sesuai warna) */}
