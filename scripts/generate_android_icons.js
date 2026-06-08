@@ -6,6 +6,7 @@ const SOURCE_ICON = path.join(process.cwd(), 'public', 'logo.png');
 const RES_DIR = path.join(process.cwd(), 'android', 'app', 'src', 'main', 'res');
 
 const CONFIGS = [
+  { density: 'mipmap-ldpi', iconSize: 36, foregroundSize: 81 },
   { density: 'mipmap-mdpi', iconSize: 48, foregroundSize: 108 },
   { density: 'mipmap-hdpi', iconSize: 72, foregroundSize: 162 },
   { density: 'mipmap-xhdpi', iconSize: 96, foregroundSize: 216 },
@@ -23,6 +24,20 @@ async function generate() {
     // Read the original image
     const image = await Jimp.read(SOURCE_ICON);
 
+    // Overwrite resources/icon.png and assets/icon.png with high-quality 1024x1024 logo
+    console.log('Updating high-resolution resource and asset icons...');
+    const highResIcon = image.clone().resize({ w: 1024, h: 1024 });
+    
+    const resourcesPath = path.join(process.cwd(), 'resources');
+    const assetsPath = path.join(process.cwd(), 'assets');
+    
+    if (fs.existsSync(resourcesPath)) {
+      await highResIcon.write(path.join(resourcesPath, 'icon.png'));
+    }
+    if (fs.existsSync(assetsPath)) {
+      await highResIcon.write(path.join(assetsPath, 'icon.png'));
+    }
+
     for (const config of CONFIGS) {
       const targetDir = path.join(RES_DIR, config.density);
       if (!fs.existsSync(targetDir)) {
@@ -36,14 +51,10 @@ async function generate() {
       await regularIcon.write(path.join(targetDir, 'ic_launcher.png'));
 
       // 2. Round icon (ic_launcher_round.png)
-      // Since modern Jimp is ESM and clone is fast, we can circle-mask or copy for simple round icons
-      // Usually on Android rounded icons are just circular crops, but we can write the icon directly
       const roundIcon = image.clone().resize({ w: config.iconSize, h: config.iconSize });
       await roundIcon.write(path.join(targetDir, 'ic_launcher_round.png'));
 
       // 3. Foreground icon (ic_launcher_foreground.png)
-      // Adaptive icons expect a foreground layer. Let's make the logo centered in a 108x108 viewport
-      // We can create a transparent canvas and center our resized logo
       const fgSize = config.foregroundSize;
       
       // We resize the logo so it sits within the safe area of adaptive icon (safe area is 66% of the size)
@@ -59,6 +70,11 @@ async function generate() {
       
       canvas.composite(resizedLogo, xOffset, yOffset);
       await canvas.write(path.join(targetDir, 'ic_launcher_foreground.png'));
+
+      // 4. Solid background icon (ic_launcher_background.png)
+      // This overrides the default blue grid background with a clean white canvas
+      const bgCanvas = new Jimp({ width: fgSize, height: fgSize, color: 0xFFFFFFFF });
+      await bgCanvas.write(path.join(targetDir, 'ic_launcher_background.png'));
     }
 
     console.log('✨ All Android launcher icons generated successfully from logo.png!');
