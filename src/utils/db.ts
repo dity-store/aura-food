@@ -249,18 +249,43 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   yesterdayRevenue: number;
 }> {
   const pesanan = await fetchUniversalDataFromGAS('Data_Pesanan');
-  const details = await fetchUniversalDataFromGAS('Data_Detail_Pesanan');
+  const details = await fetchUniversalDataFromGAS('Detail_Pesanan');
   
   const getLocalDateString = (dStr: any) => {
+    if (!dStr) return '';
+    if (dStr instanceof Date) {
+      const yr = dStr.getFullYear();
+      const mo = String(dStr.getMonth() + 1).padStart(2, '0');
+      const dy = String(dStr.getDate()).padStart(2, '0');
+      return `${yr}-${mo}-${dy}`;
+    }
+    const str = String(dStr).trim();
+    if (str.includes('T')) {
+      return str.split('T')[0];
+    }
+    if (str.includes('/')) {
+      const parts = str.split(' ')[0].split('/');
+      if (parts.length === 3) {
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    } else if (str.includes('-')) {
+      const datePart = str.split(' ')[0];
+      const parts = datePart.split('-');
+      if (parts.length === 3 && parts[0].length === 4) {
+        return datePart;
+      }
+    }
+    
     try {
       const d = new Date(dStr);
-      const yr = d.getFullYear();
-      const mo = String(d.getMonth() + 1).padStart(2, '0');
-      const dy = String(d.getDate()).padStart(2, '0');
-      return `${yr}-${mo}-${dy}`;
-    } catch {
-      return '';
-    }
+      if (!isNaN(d.getTime())) {
+        const yr = d.getFullYear();
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dy = String(d.getDate()).padStart(2, '0');
+        return `${yr}-${mo}-${dy}`;
+      }
+    } catch {}
+    return '';
   };
 
   let validPesanan = pesanan.filter(p => {
@@ -304,16 +329,15 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
 
   const categorySales = { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 };
   details.forEach(d => {
-    if (idCabang !== 'All' && String(d.ID_CABANG) !== String(idCabang)) return;
-    const dPesananId = String(d.ID_PESANAN || d[0]);
+    const dPesananId = String(d.ID_PESANAN || d[1] || d[0]);
     if (selectedDateStr && !validPesananIds.has(dPesananId)) return;
 
-    const cat = String(d.KATEGORI || d.Kategori || d[3] || '').toUpperCase();
-    const qty = Number(d.JUMLAH || d.Jumlah || d[4] || 0);
-    if (cat.includes('MAKANAN')) categorySales.Makanan += qty;
-    if (cat.includes('MINUMAN')) categorySales.Minuman += qty;
-    if (cat.includes('PASTA')) categorySales.Pasta += qty;
-    if (cat.includes('SPECIAL')) categorySales.Special += qty;
+    const nm = String(d.NAMA_MENU || d[2] || '').toLowerCase();
+    const qty = Number(d.QTY || d.JUMLAH || d.Jumlah || d[5] || d[4] || 0);
+    if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) categorySales.Pasta += qty;
+    else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) categorySales.Special += qty;
+    else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh')) categorySales.Minuman += qty;
+    else categorySales.Makanan += qty;
   });
 
   // Most recent first
@@ -326,14 +350,14 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
       ID_PESANAN: p.ID_PESANAN || p[0],
       TANGGAL_WAKTU: p.TANGGAL_WAKTU || p[1],
       ID_CABANG: p.ID_CABANG || p[2],
-      TOTAL_TAGIHAN: Number(p.TOTAL_TAGIHAN || p[3] || 0),
+      TOTAL_TAGIHAN: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
       METODE_BAYAR: p.METODE_BAYAR || p[4]
     },
-    detail: details.filter(d => (d.ID_PESANAN || d[0]) === (p.ID_PESANAN || p[0])),
+    detail: details.filter(d => String(d.ID_PESANAN || d[1] || d[0]) === String(p.ID_PESANAN || p[0])),
     status: 'synced' as 'synced',
     timestamp: p.TANGGAL_WAKTU || p[1],
     paymentMethod: p.METODE_BAYAR || p[4],
-    totalAmount: Number(p.TOTAL_TAGIHAN || p[3] || 0),
+    totalAmount: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
     cabang: p.ID_CABANG || p[2]
   }));
 

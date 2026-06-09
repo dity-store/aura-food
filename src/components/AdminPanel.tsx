@@ -280,11 +280,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
         setSearchQuery('');
         customEvt.detail.handled = true;
         customEvt.preventDefault();
+      } else if (activeModule !== null) {
+        setActiveModule(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
       }
     };
     window.addEventListener('aura-backpress', handleAndroidBack);
     return () => window.removeEventListener('aura-backpress', handleAndroidBack);
-  }, [showModal, selectedIds, isSearchActive]);
+  }, [showModal, selectedIds, isSearchActive, activeModule]);
   
   // Basic Form States
   const [formData, setFormData] = useState<any>({ STATUS: 'Tersedia' });

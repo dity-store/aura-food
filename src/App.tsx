@@ -83,14 +83,6 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
-  const [showWebSplash, setShowWebSplash] = useState<boolean>(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowWebSplash(false);
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, []);
 
   // Diagnostic states
   const [showDiagnosticModal, setShowDiagnosticModal] = useState<boolean>(false);
@@ -259,7 +251,13 @@ export default function App() {
         return;
       }
 
-      // 3. Dual-tap Exit grace period
+      // 3. Navigate to Dashboard if not already there, else Exit grace period
+      if (activeTab !== 'dashboard') {
+        setActiveTab('dashboard');
+        return;
+      }
+
+      // 4. Dual-tap Exit grace period
       if (!exitWarning) {
         setExitWarning(true);
         setTimeout(() => setExitWarning(false), 2000);
@@ -271,7 +269,7 @@ export default function App() {
     return () => {
       backListener.then(listener => listener.remove()).catch(() => {});
     };
-  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal]);
+  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal, activeTab]);
 
 
 
@@ -311,7 +309,14 @@ export default function App() {
         return;
       }
 
-      // 3. Dual-tap Exit grace period
+      // 3. Navigate to Dashboard if not already there, else Exit grace period
+      if (activeTab !== 'dashboard') {
+        setActiveTab('dashboard');
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+
+      // 4. Dual-tap Exit grace period
       if (!exitWarning) {
         setExitWarning(true);
         window.history.pushState({ appInit: true }, '', window.location.pathname);
@@ -324,7 +329,7 @@ export default function App() {
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal]);
+  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal, activeTab]);
 
   const handleReloadData = () => {
     setRefreshKey(prev => prev + 1);
@@ -612,29 +617,6 @@ export default function App() {
 
   return (
     <>
-      {showWebSplash && (
-        <div className="fixed inset-0 bg-white z-[99999999] flex flex-col items-center justify-between py-12 px-6 select-none font-sans transition-all duration-300 animate-out fade-out">
-          <div />
-          <div className="flex flex-col items-center text-center space-y-6 animate-in zoom-in-95 duration-500">
-            <div className="h-28 w-28 rounded-full bg-neutral-50 p-1.5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-zinc-100 flex items-center justify-center">
-              <img src="/logo.png" alt="Aura Food Logo" className="h-full w-full object-cover rounded-full" />
-            </div>
-            <div className="space-y-1.5">
-              <h1 className="text-xl font-black tracking-[0.25em] text-red-750 uppercase leading-none">
-                AURA FOOD
-              </h1>
-              <p className="text-[10px] font-extrabold tracking-[0.4em] text-amber-500 uppercase leading-none pl-1">
-                KASIR
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-col items-center">
-            <p className="text-[10px] font-extrabold tracking-widest text-zinc-400 font-mono">
-              v1.0
-            </p>
-          </div>
-        </div>
-      )}
       <div className={`min-h-screen bg-neutral-50 text-zinc-950 font-sans flex flex-col justify-between ${isFullScreenTab ? 'pb-0' : 'pb-24'}`}>
       
       {/* EXIT WARNING TOAST */}
