@@ -43,6 +43,29 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
   const [historyModalTx, setHistoryModalTx] = useState<Transaction | null>(null);
   const lastFetchParamsRef = useRef<string>('');
 
+  // Back button interception for Android
+  useEffect(() => {
+    const handleAndroidBack = (e: Event) => {
+      const customEvt = e as CustomEvent;
+      if (historyModalTx !== null) {
+        setHistoryModalTx(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showHistoryFilter) {
+        setShowHistoryFilter(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (isSearchHistoryActive) {
+        setIsSearchHistoryActive(false);
+        setHistorySearchQuery('');
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      }
+    };
+    window.addEventListener('aura-backpress', handleAndroidBack);
+    return () => window.removeEventListener('aura-backpress', handleAndroidBack);
+  }, [historyModalTx, showHistoryFilter, isSearchHistoryActive]);
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -206,7 +229,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                 <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                   <ReceiptText className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
                   <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Riwayat Kosong</p>
-                  <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan pesanan hari ini di database lokal.</p>
+                  <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan pesanan hari ini di sistem pusat.</p>
                   {activeBranch !== 'ADMIN' && (
                     <button 
                       onClick={onCreateTransaction || onBack}

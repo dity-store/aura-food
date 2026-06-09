@@ -81,6 +81,14 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+  const [showWebSplash, setShowWebSplash] = useState<boolean>(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowWebSplash(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Diagnostic states
   const [showDiagnosticModal, setShowDiagnosticModal] = useState<boolean>(false);
@@ -207,27 +215,65 @@ export default function App() {
   const [exitWarning, setExitWarning] = useState(false);
 
   useEffect(() => {
-    const handlePopState = (e: PopStateEvent) => {
-      // If we got to here, it means the browser tried to navigate back,
-      // and we have no internal state (popups/sheets) to close.
-      // This is the SPA container closing itself (the app).                
-      if (!exitWarning) {
-        setExitWarning(true);
-        history.pushState(null, '', window.location.pathname); // re-push current state to block
-        setTimeout(() => setExitWarning(false), 2000);
-        // FIXME: Show toast "tekan sekali lagi untuk keluar"
-      } else {
-        // Here we can actually allow exit if needed, but in SPA it's tricky.
-        // For now, simple implementation.
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [exitWarning]);
+    // Initial pushState to give us a back-button buffer so the app doesn't close on first press
+    if (!window.history.state || !window.history.state.appInit) {
+      window.history.pushState({ appInit: true }, '', window.location.pathname);
+    }
+  }, []);
 
   const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState<boolean>(false);
   const [showNetworkInfo, setShowNetworkInfo] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      // 1. Broadcast custom backpress dispatch to child components
+      const backEvent = new CustomEvent('aura-backpress', {
+        cancelable: true,
+        detail: { handled: false }
+      });
+      window.dispatchEvent(backEvent);
+
+      if (backEvent.defaultPrevented || (backEvent.detail as any).handled) {
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+
+      // 2. Clear central App modals
+      if (showLogoutModal) {
+        setShowLogoutModal(false);
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+      if (showDisconnectModal) {
+        setShowDisconnectModal(false);
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+      if (showNetworkInfo) {
+        setShowNetworkInfo(false);
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+      if (showDiagnosticModal) {
+        setShowDiagnosticModal(false);
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        return;
+      }
+
+      // 3. Dual-tap Exit grace period
+      if (!exitWarning) {
+        setExitWarning(true);
+        window.history.pushState({ appInit: true }, '', window.location.pathname);
+        setTimeout(() => setExitWarning(false), 2000);
+      } else {
+        // Exit normally by blowing past state history
+        window.history.go(-2);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal]);
 
   const handleReloadData = () => {
     setRefreshKey(prev => prev + 1);
@@ -405,6 +451,7 @@ export default function App() {
       }
 
       // 5. If not found locally or password mismatch on local cache, check using fast online verification
+      let onlineCheckError: any = null;
       if (navigator.onLine && gasUrl) {
          try {
             const response = await fetch(gasUrl, {
@@ -462,13 +509,15 @@ export default function App() {
             }
          } catch (onlineErr) {
             console.warn("Gagal melakukan login online cepat:", onlineErr);
-            // Fallback to offline message
+            onlineCheckError = onlineErr;
          }
       }
 
       // 6. If they're offline or online checking failed to route, output final fallback error message
       if (foundCabang) {
          setLoginError(`Sandi salah untuk cabang "${cleanBranch}".`);
+      } else if (onlineCheckError) {
+         setLoginError(`Koneksi Gagal: Tidak dapat menghubungi Sistem Pusat. Silakan hubungi admin atau periksa jaringan internet Anda.`);
       } else if (!navigator.onLine) {
          setLoginError(`Cabang "${cleanBranch}" belum terdaftar di sistem lokal. Sambungkan ke internet untuk menyinkronkan data.`);
       } else {
@@ -511,7 +560,31 @@ export default function App() {
   }, [activeTab]);
 
   return (
-    <div className={`min-h-screen bg-neutral-50 text-zinc-950 font-sans flex flex-col justify-between ${isFullScreenTab ? 'pb-0' : 'pb-24'}`}>
+    <>
+      {showWebSplash && (
+        <div className="fixed inset-0 bg-white z-[99999999] flex flex-col items-center justify-between py-12 px-6 select-none font-sans transition-all duration-300 animate-out fade-out">
+          <div />
+          <div className="flex flex-col items-center text-center space-y-6 animate-in zoom-in-95 duration-500">
+            <div className="h-28 w-28 rounded-full bg-neutral-50 p-1.5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-zinc-100 flex items-center justify-center">
+              <img src="/logo.png" alt="Aura Food Logo" className="h-full w-full object-cover rounded-full" />
+            </div>
+            <div className="space-y-1.5">
+              <h1 className="text-xl font-black tracking-[0.25em] text-red-750 uppercase leading-none">
+                AURA FOOD
+              </h1>
+              <p className="text-[10px] font-extrabold tracking-[0.4em] text-amber-500 uppercase leading-none pl-1">
+                KASIR
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col items-center">
+            <p className="text-[10px] font-extrabold tracking-widest text-zinc-400 font-mono">
+              v1.0
+            </p>
+          </div>
+        </div>
+      )}
+      <div className={`min-h-screen bg-neutral-50 text-zinc-950 font-sans flex flex-col justify-between ${isFullScreenTab ? 'pb-0' : 'pb-24'}`}>
       
       {/* EXIT WARNING TOAST */}
       {exitWarning && (
@@ -524,8 +597,8 @@ export default function App() {
       
       {/* GLOBAL PRINTING STATUS TOAST (Like Add to Cart) */}
       {printingStatus !== 'idle' && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[1000000] animate-in slide-in-from-top-8 duration-500">
-           <div className={`px-5 py-3 rounded-[20px] flex items-center justify-center gap-3 shadow-2xl border ${
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[1000000] animate-in slide-in-from-top-8 duration-500 w-full max-w-sm px-4">
+           <div className={`px-5 py-3 rounded-[24px] flex items-center justify-center gap-3 shadow-2xl border ${
              printingStatus === 'printing' ? 'bg-amber-500 text-black border-amber-400' : 'bg-emerald-600 text-white border-emerald-500'
            }`}>
               {printingStatus === 'printing' ? (
@@ -1158,5 +1231,6 @@ export default function App() {
       )}
 
     </div>
+    </>
   );
 }

@@ -246,6 +246,7 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   averageTransactionValue: number;
   categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
   recentTransactions: Transaction[];
+  yesterdayRevenue: number;
 }> {
   const pesanan = await fetchUniversalDataFromGAS('Data_Pesanan');
   const details = await fetchUniversalDataFromGAS('Data_Detail_Pesanan');
@@ -277,6 +278,29 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   const averageTransactionValue = totalTransactions ? totalRevenue / totalTransactions : 0;
   
   const validPesananIds = new Set(validPesanan.map(p => String(p.ID_PESANAN || p[0])));
+
+  let yesterdayRevenue = 0;
+  if (selectedDateStr) {
+    try {
+      const currentDate = new Date(selectedDateStr);
+      currentDate.setDate(currentDate.getDate() - 1);
+      const yr = currentDate.getFullYear();
+      const mo = String(currentDate.getMonth() + 1).padStart(2, '0');
+      const dy = String(currentDate.getDate()).padStart(2, '0');
+      const yesterdayDateStr = `${yr}-${mo}-${dy}`;
+      
+      const yesterdayPesanan = pesanan.filter(p => {
+        if (idCabang !== 'All' && String(p.ID_CABANG) !== String(idCabang)) return false;
+        const pDate = p.TANGGAL_WAKTU || p[1];
+        if (!pDate) return false;
+        if (getLocalDateString(pDate) !== yesterdayDateStr) return false;
+        return true;
+      });
+      yesterdayRevenue = yesterdayPesanan.reduce((sum, p) => sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0), 0);
+    } catch (e) {
+      console.error("Error calculating yesterday revenue:", e);
+    }
+  }
 
   const categorySales = { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 };
   details.forEach(d => {
@@ -318,7 +342,8 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
     totalTransactions,
     averageTransactionValue,
     categorySales,
-    recentTransactions: recentTransactionsMapped
+    recentTransactions: recentTransactionsMapped,
+    yesterdayRevenue
   };
 }
 
@@ -526,15 +551,29 @@ export async function removeFromSyncQueue(id: string): Promise<void> {
   });
 }
 
-export async function triggerGASSyncRekapHarian(): Promise<boolean> {
+export async function triggerGASSyncRekapHarian(selectedDateRaw?: string): Promise<boolean> {
   const config = getGASConfig();
   if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
   
-  const url = new URL(config.webAppUrl);
-  url.searchParams.append('action', 'trigger_rekap_harian');
-  url.searchParams.append('_timestamp', Date.now().toString());
-  
-  const res = await fetch(url.toString(), { redirect: 'follow' });
+  let formattedDate: string | undefined;
+  if (selectedDateRaw) {
+    const parts = selectedDateRaw.split('-');
+    if (parts.length === 3) {
+      formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+    } else {
+      formattedDate = selectedDateRaw;
+    }
+  }
+
+  const res = await fetch(config.webAppUrl, {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: 'TRIGGER_REKAP',
+      tanggal: formattedDate
+    }),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  });
+
   if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
   
   const result = await res.json();

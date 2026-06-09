@@ -17,7 +17,10 @@ interface SessionCache {
   filters: {
     reports: any;
     dashboard: any;
-  }
+  };
+  admin: {
+    loaded: boolean;
+  };
 }
 
 const cache: SessionCache = {
@@ -35,6 +38,9 @@ const cache: SessionCache = {
   filters: {
     reports: null,
     dashboard: null
+  },
+  admin: {
+    loaded: false,
   }
 };
 

@@ -140,6 +140,67 @@ export default function POSSimulator({
   const [pullDistance, setPullDistance] = useState(0);
   const [thermalPrinter, setThermalPrinter] = useState<any>(null); // BluetoothDevice
   const [showPrinterSettings, setShowPrinterSettings] = useState<boolean>(false);
+
+  // Back button interception for Android
+  useEffect(() => {
+    const handleAndroidBack = (e: Event) => {
+      const customEvt = e as CustomEvent;
+      if (showPrinterSettings) {
+        setShowPrinterSettings(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showReportPopup) {
+        setShowReportPopup(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showCheckoutModal) {
+        setShowCheckoutModal(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showCartPopup) {
+        setShowCartPopup(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showCatalogModal) {
+        setShowCatalogModal(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (selectedMenuForVarian) {
+        setSelectedMenuForVarian(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (selectedTransactionForKasir) {
+        setSelectedTransactionForKasir(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (confirmDiscardCart) {
+        setConfirmDiscardCart(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (confirmDeleteId) {
+        setConfirmDeleteId(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (alertMessage) {
+        setAlertMessage(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      }
+    };
+    window.addEventListener('aura-backpress', handleAndroidBack);
+    return () => window.removeEventListener('aura-backpress', handleAndroidBack);
+  }, [
+    showPrinterSettings,
+    showReportPopup,
+    showCheckoutModal,
+    showCartPopup,
+    showCatalogModal,
+    selectedMenuForVarian,
+    selectedTransactionForKasir,
+    confirmDiscardCart,
+    confirmDeleteId,
+    alertMessage
+  ]);
   
   const handleConnectPrinter = async () => {
     try {
@@ -761,6 +822,9 @@ export default function POSSimulator({
                   ))
                 )}
               </div>
+              
+              {/* Persistent extra empty space at the bottom of the list to ensure the mobile bottom checkout bar NEVER covers any menus or buttons */}
+              <div className="h-48 md:hidden" aria-hidden="true" />
             </div>
           </div>
 
@@ -1015,8 +1079,8 @@ export default function POSSimulator({
 
         {/* MODALS */}
         {selectedMenuForVarian && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-200" onClick={() => setSelectedMenuForVarian(null)}>
-            <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-sm flex flex-col max-h-[85vh] animate-in slide-in-from-bottom-full sm:slide-in-from-bottom-0 sm:zoom-in-95" onClick={e => e.stopPropagation()}>
+          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/50 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-300 ease-out" onClick={() => setSelectedMenuForVarian(null)}>
+            <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-sm flex flex-col max-h-[95vh] sm:max-h-[85vh] animate-in slide-in-from-bottom-32 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300 ease-out" onClick={e => e.stopPropagation()}>
               <div className="p-5 border-b border-zinc-100 flex justify-between items-center bg-zinc-50 rounded-t-3xl sm:rounded-t-3xl shrink-0">
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">Pilih Varian</h3>
                 <button 

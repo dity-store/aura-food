@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Transaction } from '../types';
 import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics, triggerGASSyncRekapHarian } from '../utils/db';
-import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown } from 'lucide-react';
 import { getSessionCache, setSessionDashboard, setSessionFilters } from '../utils/sessionCache';
 
 const getTodayLocalDateStr = () => {
@@ -68,6 +68,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     averageTransactionValue: number;
     categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
     recentTransactions: Transaction[];
+    yesterdayRevenue?: number;
   } | null>(() => {
     // Priority: 1. Session Memory, 2. Persistent Storage
     if (session.dashboard.data) return session.dashboard.data;
@@ -87,15 +88,32 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   const [isTriggeringRekap, setIsTriggeringRekap] = useState(false);
   const [showConfirmRekap, setShowConfirmRekap] = useState(false);
 
+  // States for in-app toast & custom Lapor modal
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
+  const [showLaporModal, setShowLaporModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => {
+         // Auto dismiss after 5s unless it's a success report toast to keep it long enough
+         setToastMessage(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
+
   const performTriggerRekap = async () => {
     setShowConfirmRekap(false);
     setIsTriggeringRekap(true);
     try {
-      await triggerGASSyncRekapHarian();
-      alert("Rekap Harian berhasil dipicu!");
+      await triggerGASSyncRekapHarian(selectedAdminDate);
+      setToastType('success');
+      setToastMessage("Rekap Harian berhasil direkap!");
       loadStats(true); // reload stats
     } catch (e: any) {
-      alert("Gagal memicu Rekap: " + (e.message || "Kesalahan jaringan"));
+      setToastType('error');
+      setToastMessage("Gagal merekap data: " + (e.message || "Kesalahan jaringan"));
     } finally {
       setIsTriggeringRekap(false);
     }
@@ -211,12 +229,42 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           });
         });
 
+        let yesterdayRevenueObj = 0;
+        try {
+          const currentDate = new Date(selectedAdminDate);
+          currentDate.setDate(currentDate.getDate() - 1);
+          const yr = currentDate.getFullYear();
+          const mo = String(currentDate.getMonth() + 1).padStart(2, '0');
+          const dy = String(currentDate.getDate()).padStart(2, '0');
+          const yesterdayDateStr = `${yr}-${mo}-${dy}`;
+          
+          const yesterdayTransactions = currentBranch === 'Semua'
+            ? unique.filter(tx => {
+                try {
+                  const d = new Date(tx.timestamp);
+                  const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  return dStr === yesterdayDateStr;
+                } catch { return false; }
+              })
+            : unique.filter(tx => String(tx.cabang) === String(currentBranch) && (() => {
+                try {
+                  const d = new Date(tx.timestamp);
+                  const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  return dStr === yesterdayDateStr;
+                } catch { return false; }
+              })());
+          yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+        } catch (e) {
+          console.error("Error calculating local yesterday revenue:", e);
+        }
+
         const localMetricsObj = {
           totalRevenue: revenue,
           totalTransactions: transCount,
           averageTransactionValue: avg,
           categorySales: { Makanan: makSales, Minuman: minSales, Pasta: pasSales, Special: speSales },
-          recentTransactions: currentTransactions.slice(0, 10)
+          recentTransactions: currentTransactions.slice(0, 10),
+          yesterdayRevenue: yesterdayRevenueObj
         };
 
         setAdminMetrics(localMetricsObj);
@@ -266,6 +314,56 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   }, [activeBranch, selectedAdminBranch, selectedAdminDate]);
 
   const currentBranchFilter = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
+  
+  const getBranchBreakdown = () => {
+    if (!adminMetrics || !adminMetrics.recentTransactions) return [];
+    
+    // Group transactions by branch ID
+    const grouped: { [key: string]: Transaction[] } = {};
+    cabangList.forEach(c => {
+      grouped[String(c.ID_CABANG)] = [];
+    });
+    
+    adminMetrics.recentTransactions.forEach(tx => {
+      const cbId = String(tx.cabang);
+      if (!grouped[cbId]) {
+        grouped[cbId] = [];
+      }
+      grouped[cbId].push(tx);
+    });
+
+    const breakdown = cabangList.map(c => {
+      const txs = grouped[String(c.ID_CABANG)] || [];
+      const revenue = txs.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+      return {
+        id: c.ID_CABANG,
+        name: c.NAMA_CABANG,
+        revenue,
+        txsCount: txs.length,
+        txs
+      };
+    }).filter(b => b.revenue > 0 || b.txsCount > 0);
+
+    return breakdown;
+  };
+
+  const getRevenueGrowthStyles = () => {
+    if (!adminMetrics) return { text: "0%", classes: "text-zinc-500 bg-zinc-50" };
+    // totalRevenue can be local or remote, today is totalRevenue
+    const yesterday = adminMetrics.yesterdayRevenue || 0;
+    const today = totalRevenue;
+    
+    if (yesterday === 0) {
+      return today > 0 
+        ? { text: "+100%", classes: "text-emerald-600 bg-emerald-50" } 
+        : { text: "0%", classes: "text-zinc-500 bg-zinc-50" };
+    }
+    
+    const diffPct = Math.round(((today - yesterday) / yesterday) * 100);
+    const text = diffPct >= 0 ? `+${diffPct}%` : `${diffPct}%`;
+    const classes = diffPct >= 0 ? "text-emerald-600 bg-emerald-50" : "text-red-600 bg-red-50";
+    return { text, classes };
+  };
   
   // Local logic configurations
   const transactions = currentBranchFilter === 'Semua'
@@ -380,9 +478,16 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                   <input 
                     type="date"
                     value={selectedAdminDate}
+                    max={getTodayLocalDateStr()}
                     onChange={(e) => {
                       if (e.target.value) {
-                        setSelectedAdminDate(e.target.value);
+                        const todayStr = getTodayLocalDateStr();
+                        if (e.target.value > todayStr) {
+                          alert("Pemberitahuan: Pemantau tidak dapat memilih tanggal di masa depan.");
+                          setSelectedAdminDate(todayStr);
+                        } else {
+                          setSelectedAdminDate(e.target.value);
+                        }
                       }
                     }}
                     className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
@@ -428,8 +533,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
             <span className="p-2 rounded-xl bg-orange-50 text-orange-600 border border-orange-100">
               <Landmark className="h-5 w-5" />
             </span>
-            <span className="text-[10px] text-emerald-600 bg-emerald-50 font-bold px-1.5 py-0.5 rounded-md">
-              +100%
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${getRevenueGrowthStyles().classes}`}>
+              {getRevenueGrowthStyles().text}
             </span>
           </div>
           <div className="mt-4">
@@ -450,9 +555,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
             <span className="p-2 rounded-xl bg-red-50 text-red-600 border border-red-100">
               <ShoppingBag className="h-5 w-5" />
             </span>
-            <span className="text-[10px] text-emerald-700 bg-emerald-100 font-bold px-1.5 py-0.5 rounded-md">
-              Sinkron
-            </span>
+            {!loadingMetrics && (
+              <span className="text-[10px] text-emerald-700 bg-emerald-100 font-bold px-1.5 py-0.5 rounded-md">
+                Sinkron
+              </span>
+            )}
           </div>
           <div className="mt-4">
             <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Pesanan</p>
@@ -647,6 +754,223 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         </div>
 
       </div>
+
+      {/* FLOAT NOTIFICATION TOAST */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000000] animate-in slide-in-from-top-8 duration-500 w-full max-w-sm px-4">
+          <div className="px-4 py-3 rounded-[24px] bg-zinc-950 text-white flex items-center justify-between gap-3 shadow-2xl border border-zinc-800/80 font-sans">
+            <div className="flex items-center gap-3">
+              <div className={`flex h-6 w-6 items-center justify-center rounded-full shrink-0 ${toastType === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}>
+                {toastType === 'error' ? <X className="h-3.5 w-3.5 text-white" /> : <Check className="h-3.5 w-3.5 text-white" />}
+              </div>
+              <span className="text-[11px] font-bold text-zinc-100">{toastMessage}</span>
+            </div>
+            {toastType === 'success' && toastMessage === "Rekap Harian berhasil direkap!" && (
+              <button 
+                onClick={() => {
+                  setToastMessage(null);
+                  setShowLaporModal(true);
+                }}
+                className="bg-red-650 hover:bg-red-700 text-white text-[10px] uppercase tracking-wider font-extrabold px-3.5 py-1.5 rounded-full transition-all cursor-pointer select-none border border-red-500 active:scale-95"
+              >
+                Lapor
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* CUSTOM LAPOR MODAL FOR ALL BRANCHES GABUNGAN */}
+      {showLaporModal && typeof document !== 'undefined' && createPortal(
+        <div style={{ zIndex: 999999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex justify-center items-center p-4 animate-in fade-in duration-200" onClick={() => setShowLaporModal(false)}>
+          <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 font-sans">
+              <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
+                Laporan Semua Cabang
+              </h3>
+              <button 
+                onClick={() => setShowLaporModal(false)}
+                className="p-1.5 bg-white hover:bg-zinc-100 rounded-lg text-zinc-700 transition shadow-sm border border-zinc-200 cursor-pointer active:scale-95"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 max-h-[60vh] overflow-y-auto bg-neutral-100 text-left space-y-4">
+              <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4 font-sans relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10"><Landmark className="w-20 h-20 text-emerald-500" /></div>
+                <div className="relative z-10 space-y-4">
+                  <p className="text-xs text-zinc-800 leading-relaxed font-black uppercase tracking-wider">
+                    Laporan Omset Semua Cabang
+                  </p>
+                  
+                  <div className="space-y-2 mt-2 bg-white/80 p-3 rounded-xl border border-emerald-150 backdrop-blur-sm text-left">
+                    <p className="text-xs text-zinc-700 flex items-center gap-2">
+                      <Calendar className="h-3.5 w-3.5 text-zinc-500" /> 
+                      <span><b className="text-zinc-900 font-extrabold">Tanggal:</b> {new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date(selectedAdminDate))}</span>
+                    </p>
+                    <p className="text-xs text-zinc-700 flex items-center gap-2">
+                      <TrendingUp className="h-3.5 w-3.5 text-emerald-600" /> 
+                      <span><b className="text-zinc-900 font-extrabold">Total Omset Gabungan:</b> Rp{(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}</span>
+                    </p>
+                    <p className="text-xs text-zinc-700 flex items-center gap-2">
+                      <ShoppingBag className="h-3.5 w-3.5 text-zinc-500" /> 
+                      <span><b className="text-zinc-900 font-extrabold">Total Pesanan:</b> {adminMetrics?.totalTransactions || 0} Selesai</span>
+                    </p>
+                  </div>
+
+                  {/* Per Branch Breakdown */}
+                  <div className="space-y-2 bg-white p-3 rounded-xl border border-emerald-150 text-left">
+                    <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Rincian Omset per Cabang</p>
+                    <div className="space-y-1.5 pt-1">
+                      {getBranchBreakdown().map(b => (
+                        <div key={b.id} className="text-xs text-zinc-750 flex justify-between items-center border-b border-zinc-100 pb-1 last:border-0 last:pb-0">
+                          <span className="font-semibold text-zinc-900">{b.name}</span>
+                          <span className="font-black text-emerald-600">
+                            Rp{b.revenue.toLocaleString('id-ID')}{' '}
+                            <span className="text-[10px] text-zinc-400 font-normal">({b.txsCount} tx)</span>
+                          </span>
+                        </div>
+                      ))}
+                      {getBranchBreakdown().length === 0 && (
+                        <p className="text-xs text-zinc-400 italic">Tidak ada rincian omset cabang</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Detailed Orders Grouped by Branch */}
+                  <div className="space-y-3">
+                    {getBranchBreakdown().map(b => (
+                      <div key={b.id} className="bg-white p-3 rounded-xl border border-zinc-200 text-left space-y-2">
+                        <p className="text-[11px] font-black text-zinc-850 uppercase tracking-tight">
+                          Rincian Cabang {b.name}:
+                        </p>
+                        <div className="space-y-1.5 text-[10px] font-mono text-zinc-650">
+                          {b.txs.map((tx, idx) => {
+                            let formattedDate = "";
+                            try {
+                              const d = new Date(tx.timestamp);
+                              formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                            } catch {
+                              formattedDate = selectedAdminDate;
+                            }
+                            return (
+                              <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
+                                <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
+                                <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}</span>
+                              </div>
+                            );
+                          })}
+                          {b.txs.length === 0 && (
+                            <p className="text-zinc-400 italic">Tidak ada pesanan</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-4 border-t border-zinc-200 bg-zinc-50 grid grid-cols-2 gap-2">
+              <button 
+                onClick={() => {
+                  const dNow = new Date(selectedAdminDate);
+                  const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
+                  const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+                  const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
+                  
+                  const breakdown = getBranchBreakdown();
+                  let breakdownText = "";
+                  let rincianPesananText = "";
+
+                  breakdown.forEach(b => {
+                    breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
+                    rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
+                    b.txs.forEach((tx, idx) => {
+                      let formattedDate = "";
+                      try {
+                        const d = new Date(tx.timestamp);
+                        formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                      } catch {
+                        formattedDate = selectedAdminDate;
+                      }
+                      rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}\n`;
+                    });
+                  });
+                  
+                  const txt = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
+                    `*Tanggal:* ${hari}, ${tglText}\n` +
+                    `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
+                    `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
+                    `*Rincian Omset per Cabang:*\n` +
+                    breakdownText +
+                    rincianPesananText + `\n` +
+                    `Terima kasih!`;
+
+                  navigator.clipboard.writeText(txt);
+                  setToastType('success');
+                  setToastMessage("Berhasil disalin ke papan klip!");
+                  setShowLaporModal(false);
+                }}
+                className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-extrabold text-[10px] py-3 rounded-xl transition flex flex-col items-center justify-center gap-1 active:scale-95 uppercase tracking-wider cursor-pointer border border-zinc-200"
+              >
+                <Copy className="h-3.5 w-3.5 text-zinc-600" />
+                <span>Salin</span>
+              </button>
+              <button 
+                onClick={() => {
+                  const dNow = new Date(selectedAdminDate);
+                  const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
+                  const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+                  const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
+                  
+                  const breakdown = getBranchBreakdown();
+                  let breakdownText = "";
+                  let rincianPesananText = "";
+
+                  breakdown.forEach(b => {
+                    breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
+                    rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
+                    b.txs.forEach((tx, idx) => {
+                      let formattedDate = "";
+                      try {
+                        const d = new Date(tx.timestamp);
+                        formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                      } catch {
+                        formattedDate = selectedAdminDate;
+                      }
+                      rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}\n`;
+                    });
+                  });
+                  
+                  const txt = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
+                    `*Tanggal:* ${hari}, ${tglText}\n` +
+                    `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
+                    `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
+                    `*Rincian Omset per Cabang:*\n` +
+                    breakdownText +
+                    rincianPesananText + `\n` +
+                    `Terima kasih!`;
+
+                  const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(txt)}`;
+                  window.open(url, '_blank');
+                  setToastType('success');
+                  setToastMessage("Berhasil dibagikan ke WhatsApp!");
+                  setShowLaporModal(false);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] py-3 rounded-xl transition flex flex-col items-center justify-center gap-1 active:scale-95 uppercase tracking-wider cursor-pointer shadow-sm"
+              >
+                <Share2 className="h-3.5 w-3.5 text-white" />
+                <span>WhatsApp</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* MODAL KONFIRMASI REKAP HARIAN */}
       {showConfirmRekap && typeof document !== 'undefined' && createPortal(

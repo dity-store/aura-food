@@ -25,7 +25,8 @@ import {
   BookOpen,
   ReceiptText,
   X,
-  Info
+  Info,
+  Check
 } from 'lucide-react';
 import { Cabang, Transaction } from '../types';
 import { getTransactions, getTransactionsFromGAS, getAdminReportsData } from '../utils/db';
@@ -108,7 +109,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   // Cache helper
   const getCacheKey = () => {
     const currentBranchId = activeBranch === 'ADMIN' ? filterCabang : activeBranch;
-    return `cached_buku_kas_data_${currentBranchId || 'ALL'}`;
+    return `cached_laporan_data_${currentBranchId || 'ALL'}_${filterPeriode || 'BULANAN'}_${filterType || 'GABUNGAN'}_${selectedYear}_${selectedMonth}_${selectedDate}`;
   };
 
   const [bukuKasData, setBukuKasData] = useState<{
@@ -122,7 +123,14 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
 
     try {
       const initialBranch = activeBranch === 'ADMIN' ? filterCabang : activeBranch;
-      const cached = localStorage.getItem(`cached_buku_kas_data_${initialBranch}`);
+      const initialPeriode = localStorage.getItem('AURA_REPORTS_FILTER_PERIODE') || 'BULANAN';
+      const initialType = localStorage.getItem('AURA_REPORTS_FILTER_TYPE') || 'GABUNGAN';
+      const initialMonth = localStorage.getItem('AURA_REPORTS_FILTER_MONTH') || String(new Date().getMonth());
+      const initialYear = localStorage.getItem('AURA_REPORTS_FILTER_YEAR') || String(new Date().getFullYear());
+      const initialDate = localStorage.getItem('AURA_REPORTS_FILTER_DATE') || new Date().toISOString().substring(0, 10);
+      
+      const key = `cached_laporan_data_${initialBranch || 'ALL'}_${initialPeriode}_${initialType}_${initialYear}_${initialMonth}_${initialDate}`;
+      const cached = localStorage.getItem(key);
       return cached ? JSON.parse(cached) : null;
     } catch {
       return null;
@@ -131,6 +139,17 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   
   const [loadingBukuKas, setLoadingBukuKas] = useState<boolean>(false);
   const [bukuKasError, setBukuKasError] = useState<string | null>(null);
+
+  // Toast notifications for file actions (share, copy, pdf)
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Pull to refresh states
   const [pullDistance, setPullDistance] = useState(0);
@@ -162,6 +181,24 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [selectedTx, setSelectedTx] = useState<any>(null);
+
+  // Back button interception for Android
+  useEffect(() => {
+    const handleAndroidBack = (e: Event) => {
+      const customEvt = e as CustomEvent;
+      if (selectedTx !== null) {
+        setSelectedTx(null);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showShareMenu) {
+        setShowShareMenu(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      }
+    };
+    window.addEventListener('aura-backpress', handleAndroidBack);
+    return () => window.removeEventListener('aura-backpress', handleAndroidBack);
+  }, [selectedTx, showShareMenu]);
   
   const isBukuKas = true; // Reports is strictly the General Ledger (Buku Kas & Transaksi) as requested
   const months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
@@ -175,7 +212,23 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       const date = parseTransactionDate(tglStr);
       const cabRaw = t.CABANG || t.ID_CABANG || t[2] || '';
       const ket = t.KETERANGAN || t.Keterangan || t[3] || '';
-      const kat = t.JENIS || t.Kategori || t[1] || '';
+      
+      // Find a key matching 'jenis', 'JENIS', 'Jenis Transaksi', 'Kategori', etc. case insensitively
+      let kat = '';
+      if (t && typeof t === 'object' && !Array.isArray(t)) {
+        const keys = Object.keys(t);
+        const foundKey = keys.find(k => {
+          const lower = k.toLowerCase().replace(/[\s_-]/g, '').trim();
+          return lower === 'jenis' || lower === 'jenistransaksi' || lower === 'kategori' || lower === 'jenis_transaksi';
+        });
+        if (foundKey) {
+          kat = String(t[foundKey]).trim();
+        }
+      }
+      
+      if (!kat) {
+        kat = t.JENIS || t.Kategori || t[1] || '';
+      }
       
       const debit = Number(t.DEBIT || t.Masuk || t[4] || 0);
       const kredit = Number(t.KREDIT || t.Keluar || t[5] || 0);
@@ -258,16 +311,22 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
 
   const handleCopyText = () => {
     navigator.clipboard.writeText(getShareText());
+    setToastType('success');
+    setToastMessage("Berhasil disalin ke papan klip!");
     setShowShareMenu(false);
   };
 
   const handleShareWA = () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(getShareText())}`, '_blank');
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(getShareText())}`, '_blank');
+    setToastType('success');
+    setToastMessage("Berhasil dibagikan ke WhatsApp!");
     setShowShareMenu(false);
   };
 
   const handleExportPDF = () => {
     window.print();
+    setToastType('success');
+    setToastMessage("Berhasil mengarsipkan laporan menjadi PDF!");
     setShowShareMenu(false);
   };
 
@@ -381,6 +440,18 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
+      {/* FLOAT NOTIFICATION TOAST */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000000] animate-in slide-in-from-top-8 duration-500 w-full max-w-sm px-4">
+          <div className="px-4 py-3 rounded-[24px] bg-zinc-950 text-white flex items-center justify-center gap-3 shadow-2xl border border-zinc-800/80 font-sans">
+            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 shrink-0">
+              <Check className="h-3 w-3 text-white" />
+            </div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-zinc-100">{toastMessage}</span>
+          </div>
+        </div>
+      )}
+
       {pullDistance > 0 && (
         <div className="fixed top-20 left-0 right-0 flex justify-center items-center h-12 z-[1000] pointer-events-none">
           <RefreshCw className="h-6 w-6 text-red-650 animate-spin" style={{ opacity: pullDistance / 100 }} />
@@ -437,7 +508,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10 border-b border-zinc-100 pb-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-2xl bg-red-50 border border-red-100 text-red-650 flex items-center justify-center shrink-0 shadow-sm">
-              <BookOpen className="h-5 w-5 sm:h-6 sm:w-6" />
+              <FileText className="h-5 w-5 sm:h-6 sm:w-6" />
             </div>
             <div className="text-left">
               <h3 className="text-sm font-black text-zinc-900 uppercase tracking-wider">
@@ -578,7 +649,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
             >
               <option value="GABUNGAN">PEMASUKAN & PENGELUARAN</option>
               <option value="PEMASUKAN">PEMASUKAN SAJA</option>
-              <option value="LABARUGI">LABA RUGI SAJA</option>
+              <option value="PENGELUARAN">PENGELUARAN SAJA</option>
             </select>
           </div>
 
