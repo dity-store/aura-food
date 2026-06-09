@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import { SplashScreen } from '@capacitor/splash-screen';
 import AuraDashboard from './components/AuraDashboard';
 import POSSimulator from './components/POSSimulator';
 import AdminPanel from './components/AdminPanel';
@@ -212,6 +214,9 @@ export default function App() {
     }
   };
   
+  const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
+  const [showDisconnectModal, setShowDisconnectModal] = useState<boolean>(false);
+  const [showNetworkInfo, setShowNetworkInfo] = useState<boolean>(false);
   const [exitWarning, setExitWarning] = useState(false);
 
   useEffect(() => {
@@ -219,11 +224,56 @@ export default function App() {
     if (!window.history.state || !window.history.state.appInit) {
       window.history.pushState({ appInit: true }, '', window.location.pathname);
     }
-  }, []);
+    
+    // Hide native splash screen
+    SplashScreen.hide().catch(err => console.log('Splash hide error:', err));
+    
+    // Capacitor Android hardware back button handler
+    const backListener = CapacitorApp.addListener('backButton', (data) => {
+      // 1. Broadcast custom backpress dispatch to child components
+      const backEvent = new CustomEvent('aura-backpress', {
+        cancelable: true,
+        detail: { handled: false }
+      });
+      window.dispatchEvent(backEvent);
 
-  const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
-  const [showDisconnectModal, setShowDisconnectModal] = useState<boolean>(false);
-  const [showNetworkInfo, setShowNetworkInfo] = useState<boolean>(false);
+      if (backEvent.defaultPrevented || (backEvent.detail as any).handled) {
+        return; // Handled by a component (modal, sheet closed)
+      }
+
+      // 2. Clear central App modals
+      if (showLogoutModal) {
+        setShowLogoutModal(false);
+        return;
+      }
+      if (showDisconnectModal) {
+        setShowDisconnectModal(false);
+        return;
+      }
+      if (showNetworkInfo) {
+        setShowNetworkInfo(false);
+        return;
+      }
+      if (showDiagnosticModal) {
+        setShowDiagnosticModal(false);
+        return;
+      }
+
+      // 3. Dual-tap Exit grace period
+      if (!exitWarning) {
+        setExitWarning(true);
+        setTimeout(() => setExitWarning(false), 2000);
+      } else {
+        CapacitorApp.exitApp().catch(() => {});
+      }
+    });
+
+    return () => {
+      backListener.then(listener => listener.remove()).catch(() => {});
+    };
+  }, [exitWarning, showLogoutModal, showDisconnectModal, showNetworkInfo, showDiagnosticModal]);
+
+
 
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
@@ -267,8 +317,9 @@ export default function App() {
         window.history.pushState({ appInit: true }, '', window.location.pathname);
         setTimeout(() => setExitWarning(false), 2000);
       } else {
-        // Exit normally by blowing past state history
+        // Exit normally by blowing past state history or using Capacitor
         window.history.go(-2);
+        CapacitorApp.exitApp().catch(() => {});
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -1231,6 +1282,15 @@ export default function App() {
       )}
 
     </div>
+    
+    {/* Exit Warning Toast */}
+    {exitWarning && (
+      <div className="fixed bottom-20 left-4 right-4 z-[9999] flex justify-center pointer-events-none animate-in fade-in slide-in-from-bottom-5">
+        <div className="bg-zinc-900/90 backdrop-blur-md text-white text-xs font-semibold px-4 py-3 rounded-full shadow-lg border border-white/10">
+          Tekan sekali lagi untuk keluar
+        </div>
+      </div>
+    )}
     </>
   );
 }

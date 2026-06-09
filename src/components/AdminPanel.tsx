@@ -329,14 +329,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
 
   // RELATION RESOLUTION HELPERS FOR BEAUTIFUL NAMES INSTEAD OF CRYPTIC IDs
   const getCabangName = (cabangId: any) => {
-    const defaultBranchName = (master?.cabang && master.cabang.length > 0) ? master.cabang[0].NAMA_CABANG : 'Pusat';
-    if (!master?.cabang || !cabangId) return defaultBranchName;
+    const defaultName = (master?.cabang && master.cabang.length > 0) ? master.cabang[0].NAMA_CABANG : '-';
+    if (!cabangId && cabangId !== 0) return defaultName;
+    if (!master?.cabang) return cabangId;
     const targetId = String(cabangId).trim().toLowerCase();
     const found = master.cabang.find((c: any) => 
       String(c.ID_CABANG).trim().toLowerCase() === targetId || 
       String(c.NAMA_CABANG).trim().toLowerCase() === targetId
     );
-    return found ? found.NAMA_CABANG : cabangId;
+    return found ? found.NAMA_CABANG : (cabangId || defaultName);
   };
 
   const getKategoriName = (kategoriId: any) => {
@@ -866,45 +867,48 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     setSelectedIds([]); // Clear selection when switching modules
     setActiveModule(id);
     
-    if (id === 'inventaris' && inventarisData.length === 0) {
-      setIsUniversalLoading(true);
-      const data = await fetchUniversalDataFromGAS('Data_Inventaris');
-      setInventarisData(data || []);
-      setIsUniversalLoading(false);
-    } else if (id === 'shift' && shiftData.length === 0) {
-      setIsUniversalLoading(true);
-      const data = await fetchUniversalDataFromGAS('Data_Izin_Shift');
-      setShiftData(data || []);
-      setIsUniversalLoading(false);
-    } else if (id === 'kas') {
-      setIsUniversalLoading(true);
-      const data = await fetchUniversalDataFromGAS('Transaksi');
-      if (data && data.length > 0) {
-        const sorted = [...data].sort((a, b) => {
-          const parseToDate = (cellValue: any): Date => {
-            if (!cellValue) return new Date(0);
-            if (cellValue instanceof Date) return cellValue;
-            let str = String(cellValue).trim().substring(0, 10);
-            if (str.includes('/')) {
-              const p = str.split('/');
-              return new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
-            } else if (str.includes('-')) {
-              const p = str.split('-');
-              return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-            }
-            return new Date(cellValue);
-          };
-          return parseToDate(b.tanggal || b.TANGGAL || (Array.isArray(b) ? b[0] : '')).getTime() - parseToDate(a.tanggal || a.TANGGAL || (Array.isArray(a) ? a[0] : '')).getTime();
-        });
-        setBukuKasList(sorted);
-        localStorage.setItem('cached_buku_kas_data_ALL', JSON.stringify({
-          status: 'success',
-          transaksi: sorted,
-          pemasukan: sorted.reduce((sum: number, tx: any) => sum + Number(tx.debit || tx.DEBIT || (Array.isArray(tx) ? tx[4] : 0) || 0), 0),
-          pengeluaran: sorted.reduce((sum: number, tx: any) => sum + Number(tx.kredit || tx.KREDIT || (Array.isArray(tx) ? tx[5] : 0) || 0), 0),
-          saldoBersih: 0
-        }));
+    try {
+      if (id === 'inventaris' && inventarisData.length === 0) {
+        setIsUniversalLoading(true);
+        const data = await fetchUniversalDataFromGAS('Data_Inventaris');
+        setInventarisData(data || []);
+      } else if (id === 'shift' && shiftData.length === 0) {
+        setIsUniversalLoading(true);
+        const data = await fetchUniversalDataFromGAS('Data_Izin_Shift');
+        setShiftData(data || []);
+      } else if (id === 'kas') {
+        setIsUniversalLoading(true);
+        const data = await fetchUniversalDataFromGAS('Transaksi');
+        if (data && data.length > 0) {
+          const sorted = [...data].sort((a, b) => {
+            const parseToDate = (cellValue: any): Date => {
+              if (!cellValue) return new Date(0);
+              if (cellValue instanceof Date) return cellValue;
+              let str = String(cellValue).trim().substring(0, 10);
+              if (str.includes('/')) {
+                const p = str.split('/');
+                return new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+              } else if (str.includes('-')) {
+                const p = str.split('-');
+                return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+              }
+              return new Date(cellValue);
+            };
+            return parseToDate(b.tanggal || b.TANGGAL || (Array.isArray(b) ? b[0] : '')).getTime() - parseToDate(a.tanggal || a.TANGGAL || (Array.isArray(a) ? a[0] : '')).getTime();
+          });
+          setBukuKasList(sorted);
+          localStorage.setItem('cached_buku_kas_data_ALL', JSON.stringify({
+            status: 'success',
+            transaksi: sorted,
+            pemasukan: sorted.reduce((sum: number, tx: any) => sum + Number(tx.debit || tx.DEBIT || (Array.isArray(tx) ? tx[4] : 0) || 0), 0),
+            pengeluaran: sorted.reduce((sum: number, tx: any) => sum + Number(tx.kredit || tx.KREDIT || (Array.isArray(tx) ? tx[5] : 0) || 0), 0),
+            saldoBersih: 0
+          }));
+        }
       }
+    } catch (e) {
+      console.warn("Error fetching data for module:", id, e);
+    } finally {
       setIsUniversalLoading(false);
     }
   };
@@ -1241,6 +1245,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     
     // Find a key matching 'jenis', 'JENIS', 'Jenis Transaksi', 'Kategori', etc. case insensitively
     let jenis = '';
+    let cabang = '';
     if (rawK && typeof rawK === 'object' && !Array.isArray(rawK)) {
       const keys = Object.keys(rawK);
       const foundKey = keys.find(k => {
@@ -1250,13 +1255,24 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       if (foundKey) {
         jenis = String(rawK[foundKey]).trim();
       }
+
+      const cabangKey = keys.find(k => {
+        const lower = k.toLowerCase().replace(/[\s_-]/g, '').trim();
+        return lower === 'cabang' || lower === 'idcabang' || lower === 'branch';
+      });
+      if (cabangKey) {
+        cabang = String(rawK[cabangKey]).trim();
+      }
     }
     
     if (!jenis) {
       jenis = rawK.jenis || rawK.JENIS || rawK.Kategori || (Array.isArray(rawK) ? rawK[1] : '') || 'Pemasukan/Pengeluaran';
     }
 
-    const cabang = rawK.cabang || rawK.CABANG || rawK.ID_CABANG || (Array.isArray(rawK) ? rawK[2] : '');
+    if (!cabang) {
+      cabang = rawK.cabang || rawK.CABANG || rawK.ID_CABANG || rawK.Cabang || (Array.isArray(rawK) ? rawK[2] : '');
+    }
+
     const keterangan = rawK.keterangan || rawK.KETERANGAN || rawK.Keterangan || (Array.isArray(rawK) ? rawK[3] : '') || 'Transaksi Kas';
     const debit = Number(rawK.debit || rawK.DEBIT || (Array.isArray(rawK) ? rawK[4] : 0) || 0);
     const kredit = Number(rawK.kredit || rawK.KREDIT || (Array.isArray(rawK) ? rawK[5] : 0) || 0);
@@ -1349,8 +1365,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   else if (activeModule === 'kategori') filteredListLength = filteredKategori.length;
   else if (activeModule === 'menu') filteredListLength = filteredMenu.length;
   else if (activeModule === 'varian') filteredListLength = filteredVarian.length;
-  else if (activeModule === 'inventaris') filteredListLength = inventarisData.length;
-  else if (activeModule === 'shift') filteredListLength = shiftData.length;
+  else if (activeModule === 'inventaris') filteredListLength = filteredInventaris.length;
+  else if (activeModule === 'shift') filteredListLength = filteredShift.length;
 
   return (
     <SelectionContext.Provider value={{ selectedIds, isSelectionMode, toggleSelection, handleEditItem, getItemId }}>
@@ -1516,7 +1532,26 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               className="flex-1 overflow-y-auto p-4 sm:p-6 bg-zinc-50 pb-28 relative"
             >
               
-              {activeModule === 'kas' && (
+              {isSearchActive && searchQuery && filteredListLength === 0 ? (
+                <div className="max-w-4xl mx-auto py-16">
+                  <div className="flex items-center justify-center flex-col text-zinc-400 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+                    <Search className="h-12 w-12 mb-4 opacity-70 text-zinc-300" />
+                    <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Tidak Ditemukan</p>
+                    <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Tidak ada hasil yang sesuai dengan filter pencarian Anda.</p>
+                    <button 
+                      onClick={() => {
+                        setIsSearchActive(false);
+                        setSearchQuery('');
+                      }}
+                      className="bg-zinc-50 text-zinc-600 hover:bg-zinc-100 font-black text-[10px] px-6 py-3 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-widest cursor-pointer mt-4 border border-zinc-200"
+                    >
+                      <Trash2 className="h-4 w-4 text-red-700" /> Reset Carian
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {activeModule === 'kas' && (
                 <div className="max-w-4xl mx-auto">
                   {filteredBukuKas.length === 0 ? (
                     <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
@@ -1818,6 +1853,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                   )}
                 </div>
               )}
+                </>
+              )}
             </div>
             
             {/* Floating Action Button (FAB) for adding items */}
@@ -1875,6 +1912,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       <input type="datetime-local" value={formData.tanggal || formData.TANGGAL || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
                     </div>
                     <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
+                      <select required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                        <option value="">-- Pilih Cabang --</option>
+                        {master?.cabang?.map(c => (
+                          <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Barang</label>
                       <input type="text" placeholder="Gelas Plastik / Ayam Potong" value={formData.NAMA_BARANG || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, NAMA_BARANG: e.target.value})}/>
                     </div>
@@ -1928,6 +1974,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tanggal Izin</label>
                       <input type="datetime-local" value={formData.tanggal || formData.TANGGAL || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
                     </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
+                      <select required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                        <option value="">-- Pilih Cabang --</option>
+                        {master?.cabang?.map(c => (
+                          <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Staff</label>
@@ -1948,10 +2003,23 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* BUKU KAS FORM */}
                 {showModal === 'kas' && (
                   <>
-                    <div className="mb-4">
-                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Tanggal Entri</label>
-                      <input type="datetime-local" value={formData.tanggal || formData.TANGGAL || ''} required className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all"
-                        onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})} />
+                    <div className="mb-4 grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Tanggal Entri</label>
+                        <input type="date"
+                          max={new Date().toISOString().split('T')[0]}
+                          value={formData.tanggal ? formData.tanggal.split('T')[0] : (formData.TANGGAL ? formData.TANGGAL.split('T')[0] : '')} required className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all"
+                          onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})} />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Cabang</label>
+                        <select required className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                          <option value="">-- Pilih Cabang --</option>
+                          {master?.cabang?.map(c => (
+                            <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Jenis Transaksi (Kategori)</label>
