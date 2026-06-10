@@ -17,7 +17,7 @@ import {
   getTransactionsFromGAS,
   clearSyncedTransactions
 } from '../utils/db';
-import { printReceipt } from '../utils/pdf';
+import { printReceipt, generateAndUploadReceipt } from '../utils/pdf';
 import { connectThermalPrinter, printThermalReceipt } from '../utils/printer';
 import { getFormattedMenuDisplay } from '../utils/formatter';
 import { 
@@ -126,6 +126,7 @@ export default function POSSimulator({
 
   // Default payment
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'E-Wallet' | 'Debit Card'>('Cash');
+  const [autoPrint, setAutoPrint] = useState(true);
   const [selectedMenuForVarian, setSelectedMenuForVarian] = useState<Menu | null>(null);
   const [selectedTransactionForKasir, setSelectedTransactionForKasir] = useState<Transaction | null>(null);
   const [showCartPopup, setShowCartPopup] = useState<boolean>(false);
@@ -567,7 +568,11 @@ export default function POSSimulator({
       onSelectTransaction(newTx);
       
       setTimeout(() => {
-         printReceiptAndUpload(newTx);
+         if (autoPrint) {
+            printReceiptAndUpload(newTx);
+         } else {
+            generateAndUploadReceipt(newTx, activeBranch);
+         }
       }, 500);
 
     } catch (err) {
@@ -580,7 +585,7 @@ export default function POSSimulator({
     if (activeBranch === 'ADMIN') return;
     if (cart.length === 0) return;
 
-    if (!thermalPrinter) {
+    if (autoPrint && !thermalPrinter) {
       const isFirstOrderToday = history.filter(tx => new Date(tx.timestamp).toDateString() === new Date().toDateString()).length === 0;
       if (isFirstOrderToday) {
         setShowPrinterWarning(true);
@@ -1011,6 +1016,16 @@ export default function POSSimulator({
                       Pastikan uang sudah diterima / jika selain cash pastikan bukti pembayaran valid.
                     </p>
                   </div>
+
+                  <div className="mt-3 flex items-center justify-between bg-zinc-50 p-3 rounded-xl border border-zinc-200 cursor-pointer" onClick={() => setAutoPrint(!autoPrint)}>
+                    <div className="flex flex-col">
+                      <span className="text-xs font-black text-zinc-900">Cetak & Preview Struk</span>
+                      <span className="text-[10px] font-medium text-zinc-500">Jika mati, struk akan diarsipkan ke Google Drive</span>
+                    </div>
+                    <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoPrint ? 'bg-red-600' : 'bg-zinc-300'}`}>
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoPrint ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1026,7 +1041,7 @@ export default function POSSimulator({
                   disabled={cart.length === 0}
                   className="flex-1 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white font-extrabold text-xs py-4 rounded-xl transition flex items-center justify-center gap-2 shadow-md active:scale-95 cursor-pointer uppercase tracking-wider"
                 >
-                  Cetak Struk Sekarang
+                  {autoPrint ? 'Cetak Struk Sekarang' : 'Arsipkan ke Drive'}
                 </button>
               </div>
             </div>

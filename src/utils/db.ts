@@ -146,7 +146,7 @@ export async function syncMasterDataFromGAS(): Promise<void> {
       }
     }
   } catch (errFull) {
-    console.warn("Gagal mengambil getMasterData, mencoba fallback ke get_katalog_lengkap:", errFull);
+    // console.warn("Gagal mengambil getMasterData, mencoba fallback ke get_katalog_lengkap:", errFull);
   }
 
   // 2. Fallback ke get_katalog_lengkap jika gagal
@@ -659,6 +659,7 @@ export async function postUniversalDataToGAS(mode: string, sheetName: string, id
   if (idColumn) payload.idColumn = idColumn;
   if (idValue) payload.idValue = idValue;
   if (data && data.idValues) payload.idValues = data.idValues;
+  if (data && data.matchData) payload.matchData = data.matchData;
   
   const res = await fetch(config.webAppUrl, {
     method: 'POST',

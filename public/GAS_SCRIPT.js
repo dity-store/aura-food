@@ -403,9 +403,85 @@ function doPost(e) {
       return jsonResponse({status: "success", message: `${rowsToDelete.length} Data berhasil dihapus`});
     }
 
-    // ==========================================
-    // 4. TRIGGER REKAP DARI REACT
-    // ==========================================
+    if (payload.mode === "DELETE_DATA_MATCH") {
+      const { sheetName, matchData } = payload;
+      const sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw new Error("Sheet tidak ditemukan");
+      
+      const values = sheet.getDataRange().getValues();
+      const headers = values[0];
+      let rowsToDelete = [];
+      
+      for (let i = 1; i < values.length; i++) {
+        let isMatch = true;
+        Object.keys(matchData).forEach(key => {
+          const colIdx = headers.indexOf(key);
+          if (colIdx !== -1) {
+             let sheetVal = values[i][colIdx];
+             if (sheetVal instanceof Date) {
+               sheetVal = Utilities.formatDate(sheetVal, ZONA_WAKTU, "yyyy-MM-dd");
+               let matchVal = matchData[key];
+               if (String(matchVal).includes('T')) matchVal = matchVal.split('T')[0];
+               if (!isSameId(sheetVal, matchVal)) isMatch = false;
+             } else {
+               if (!isSameId(sheetVal, matchData[key])) isMatch = false;
+             }
+          }
+        });
+        if (isMatch) rowsToDelete.push(i + 1);
+      }
+
+      if (rowsToDelete.length === 0) throw new Error("Data match tidak ditemukan untuk dihapus");
+      
+      // Hapus hanya 1 baris yang paling cocok (paling awal ditemukan dari atas/bawah)
+      // Karena kita hanya mau update/delete 1 transaksi, hapus 1 saja
+      const rowToDelete = rowsToDelete[rowsToDelete.length - 1]; // ambil yang terbaru bawah
+      sheet.deleteRow(rowToDelete);
+      
+      console.log(`Berhasil menghapus 1 baris dari ${sheetName} dg match`);
+      return jsonResponse({status: "success", message: `Data berhasil dihapus`});
+    }
+
+    if (payload.mode === "UPDATE_DATA_MATCH") {
+      const { sheetName, matchData, data } = payload;
+      const sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw new Error("Sheet tidak ditemukan");
+      
+      const values = sheet.getDataRange().getValues();
+      const headers = values[0];
+      let rowIndex = -1;
+      
+      for (let i = values.length - 1; i >= 1; i--) {
+        let isMatch = true;
+        Object.keys(matchData).forEach(key => {
+          const colIdx = headers.indexOf(key);
+          if (colIdx !== -1) {
+             let sheetVal = values[i][colIdx];
+             if (sheetVal instanceof Date) {
+               sheetVal = Utilities.formatDate(sheetVal, ZONA_WAKTU, "yyyy-MM-dd");
+               let matchVal = matchData[key];
+               if (String(matchVal).includes('T')) matchVal = matchVal.split('T')[0];
+               if (!isSameId(sheetVal, matchVal)) isMatch = false;
+             } else {
+               if (!isSameId(sheetVal, matchData[key])) isMatch = false;
+             }
+          }
+        });
+        if (isMatch) {
+          rowIndex = i + 1;
+          break;
+        }
+      }
+
+      if (rowIndex === -1) throw new Error("Data match tidak ditemukan untuk diupdate");
+      
+      Object.keys(data).forEach(key => {
+        const colIdx = headers.indexOf(key);
+        if (colIdx !== -1) sheet.getRange(rowIndex, colIdx + 1).setValue(data[key]);
+      });
+      return jsonResponse({status: "success", message: "Data berhasil diperbarui"});
+    }
+
     if (payload.mode === "TRIGGER_REKAP") {
       const tanggalTarget = payload.tanggal || Utilities.formatDate(new Date(), ZONA_WAKTU, "dd/MM/yyyy");
       prosesRekapPendapatanHarian(ss, ZONA_WAKTU, tanggalTarget);
