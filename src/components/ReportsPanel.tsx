@@ -266,7 +266,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   const getShareText = () => {
     let cabangName = "SEMUA CABANG";
     if (filterCabang !== 'ALL') {
-      cabangName = (cabangList.find(c => String(c.ID_CABANG) === String(filterCabang))?.NAMA_CABANG || filterCabang).toUpperCase();
+      cabangName = (cabangList.find(c => String(c.ID_CABANG) === String(filterCabang))?.NAMA_CABANG || `Cabang ${filterCabang}`).toUpperCase();
     }
     
     let titleContext = "";
@@ -753,8 +753,8 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
             <div className="divide-y divide-zinc-100 bg-white max-h-[60vh] overflow-y-auto scrollbar-thin">
               {filteredKasTransactions.map((t: any, idx: number) => {
                 const tgl = formatDateToDMY(t.date, t.tglStr);
-                const cabName = cabangList.find(c => String(c.ID_CABANG) === String(t.branchId))?.NAMA_CABANG || t.branchId || 
-                  ((cabangList && cabangList.length > 0) ? cabangList[0].NAMA_CABANG : 'Pusat');
+                const cabName = cabangList.find(c => String(c.ID_CABANG) === String(t.branchId))?.NAMA_CABANG || 
+                  ((cabangList && cabangList.length > 0) ? cabangList[0].NAMA_CABANG : `Cabang ${t.branchId}`);
                 const ket = t.keterangan || 'Jurnal Umum';
                 const kat = t.kategori || 'Kas Operasional';
                 

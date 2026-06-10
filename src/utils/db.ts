@@ -67,8 +67,8 @@ export async function getMasterData(): Promise<MasterData> {
 export async function isMasterDataEmpty(): Promise<boolean> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('kategori', 'readonly');
-    const req = tx.objectStore('kategori').count();
+    const tx = db.transaction('cabang', 'readonly');
+    const req = tx.objectStore('cabang').count();
     req.onsuccess = () => resolve(req.result === 0);
     req.onerror = () => reject(req.error);
   });
@@ -243,6 +243,8 @@ export async function getTransactionsFromGAS(idCabang: string): Promise<Transact
 export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr?: string): Promise<{
   totalRevenue: number;
   totalTransactions: number;
+  totalCash: number;
+  totalTransfer: number;
   averageTransactionValue: number;
   categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
   recentTransactions: Transaction[];
@@ -300,6 +302,20 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
 
   const totalRevenue = validPesanan.reduce((sum, p) => sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0), 0);
   const totalTransactions = validPesanan.length;
+  
+  let totalCash = 0;
+  let totalTransfer = 0;
+  
+  validPesanan.forEach(p => {
+    const method = String(p.METODE_BAYAR || p[4] || '').toUpperCase();
+    const amount = Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
+    if (method === 'CASH' || method === 'TUNAI') {
+      totalCash += amount;
+    } else {
+      totalTransfer += amount;
+    }
+  });
+
   const averageTransactionValue = totalTransactions ? totalRevenue / totalTransactions : 0;
   
   const validPesananIds = new Set(validPesanan.map(p => String(p.ID_PESANAN || p[0])));
@@ -364,6 +380,8 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   return {
     totalRevenue,
     totalTransactions,
+    totalCash,
+    totalTransfer,
     averageTransactionValue,
     categorySales,
     recentTransactions: recentTransactionsMapped,
@@ -671,8 +689,8 @@ export async function fetchUniversalDataFromGAS(sheetName: string): Promise<any[
        return Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
     }
     return [];
-  } catch(e) {
-    console.error("fetchUniversalDataFromGAS err:", e);
+  } catch(e: any) {
+    console.warn(`Sinkronisasi modul ${sheetName} tertunda: Koneksi gagal atau offline.`);
     return [];
   }
 }

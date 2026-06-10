@@ -252,7 +252,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                     }}
                     className="bg-zinc-50 text-zinc-600 hover:bg-zinc-100 font-black text-[10px] px-6 py-3 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-widest cursor-pointer mt-4 border border-zinc-200"
                   >
-                    <Trash2 className="h-4 w-4 text-red-700" /> Reset Carian
+                    <Trash2 className="h-4 w-4 text-red-700" /> Reset Filter
                   </button>
                 </div>
             ) : (

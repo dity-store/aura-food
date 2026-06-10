@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Transaction } from '../types';
 import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics, triggerGASSyncRekapHarian } from '../utils/db';
-import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown, Banknote, CreditCard } from 'lucide-react';
 import { getSessionCache, setSessionDashboard, setSessionFilters } from '../utils/sessionCache';
 
 const getTodayLocalDateStr = () => {
@@ -65,6 +65,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   const [adminMetrics, setAdminMetrics] = useState<{
     totalRevenue: number;
     totalTransactions: number;
+    totalCash: number;
+    totalTransfer: number;
     averageTransactionValue: number;
     categorySales: { Makanan: number; Minuman: number; Pasta: number; Special: number };
     recentTransactions: Transaction[];
@@ -102,6 +104,23 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       return () => clearTimeout(timer);
     }
   }, [toastMessage]);
+
+  useEffect(() => {
+    const handleAndroidBack = (e: Event) => {
+      const customEvt = e as CustomEvent;
+      if (showLaporModal) {
+        setShowLaporModal(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showConfirmRekap) {
+        setShowConfirmRekap(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      }
+    };
+    window.addEventListener('aura-backpress', handleAndroidBack);
+    return () => window.removeEventListener('aura-backpress', handleAndroidBack);
+  }, [showLaporModal, showConfirmRekap]);
 
   const performTriggerRekap = async () => {
     setShowConfirmRekap(false);
@@ -151,11 +170,6 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
     const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
     const currentParamsKey = JSON.stringify({ activeBranch, currentBranch, selectedAdminDate });
-
-    // Guard: don't fetch if no force and same as last
-    if (!forceRemote && lastFetchParamsRef.current === currentParamsKey) {
-      return; 
-    }
 
     if (!forceRemote) {
       const cached = localStorage.getItem(cacheKey);
@@ -258,9 +272,22 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           console.error("Error calculating local yesterday revenue:", e);
         }
 
+        let localTotalCash = 0;
+        let localTotalTransfer = 0;
+        currentTransactions.forEach(tx => {
+          const method = String(tx.paymentMethod || '').toUpperCase();
+          if (method === 'CASH' || method === 'TUNAI') {
+            localTotalCash += tx.totalAmount || 0;
+          } else {
+            localTotalTransfer += tx.totalAmount || 0;
+          }
+        });
+
         const localMetricsObj = {
           totalRevenue: revenue,
           totalTransactions: transCount,
+          totalCash: localTotalCash,
+          totalTransfer: localTotalTransfer,
           averageTransactionValue: avg,
           categorySales: { Makanan: makSales, Minuman: minSales, Pasta: pasSales, Special: speSales },
           recentTransactions: currentTransactions.slice(0, 10),
@@ -332,12 +359,13 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       grouped[cbId].push(tx);
     });
 
-    const breakdown = cabangList.map(c => {
-      const txs = grouped[String(c.ID_CABANG)] || [];
+    const breakdown = Object.keys(grouped).map(cbId => {
+      const c = cabangList.find(cab => String(cab.ID_CABANG) === cbId);
+      const txs = grouped[cbId];
       const revenue = txs.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
       return {
-        id: c.ID_CABANG,
-        name: c.NAMA_CABANG,
+        id: cbId,
+        name: c ? c.NAMA_CABANG : `Cabang ${cbId}`,
         revenue,
         txsCount: txs.length,
         txs
@@ -384,6 +412,20 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   const totalTransactionsCount = isServerAdmin
     ? adminMetrics!.totalTransactions
     : transactions.length;
+
+  const totalCashVal = isServerAdmin
+    ? (adminMetrics!.totalCash || 0)
+    : transactions.reduce((sum, tx) => {
+        const method = String(tx.paymentMethod || '').toUpperCase();
+        return (method === 'CASH' || method === 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
+      }, 0);
+
+  const totalTransferVal = isServerAdmin
+    ? (adminMetrics!.totalTransfer || 0)
+    : transactions.reduce((sum, tx) => {
+        const method = String(tx.paymentMethod || '').toUpperCase();
+        return (method !== 'CASH' && method !== 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
+      }, 0);
 
   const avgTx = isServerAdmin
     ? adminMetrics!.averageTransactionValue
@@ -573,39 +615,39 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           </div>
         </div>
 
-        {/* TOTAL ITEMS CARD */}
+        {/* TOTAL CASH CARD */}
         <div className="bg-white p-5 rounded-2xl border border-zinc-200/80 shadow-sm flex flex-col justify-between">
           <div className="flex justify-between items-start">
             <span className="p-2 rounded-xl bg-purple-50 text-purple-600 border border-purple-100">
-              <Utensils className="h-5 w-5" />
+              <Banknote className="h-5 w-5" />
             </span>
           </div>
           <div className="mt-4">
-            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Menu Terjual</p>
+            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Cash</p>
             <h3 className="text-base sm:text-lg font-black text-zinc-900 mt-1">
               {loadingMetrics ? (
                 <span className="text-zinc-300 animate-pulse">Loading...</span>
               ) : (
-                `${totalItemsSold} Menu`
+                `Rp${totalCashVal.toLocaleString('id-ID')}`
               )}
             </h3>
           </div>
         </div>
 
-        {/* AVG TRANSACTION CARD */}
+        {/* TOTAL TRANSFER CARD */}
         <div className="bg-white p-5 rounded-2xl border border-zinc-200/80 shadow-sm flex flex-col justify-between">
           <div className="flex justify-between items-start">
             <span className="p-2 rounded-xl bg-sky-50 text-sky-600 border border-sky-100">
-              <Activity className="h-5 w-5" />
+              <CreditCard className="h-5 w-5" />
             </span>
           </div>
           <div className="mt-4">
-            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Rata-rata Transaksi</p>
+            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Transfer</p>
             <h3 className="text-base sm:text-lg font-black text-zinc-900 mt-1">
               {loadingMetrics ? (
                 <span className="text-zinc-300 animate-pulse">Loading...</span>
               ) : (
-                `Rp${avgTx.toLocaleString('id-ID')}`
+                `Rp${totalTransferVal.toLocaleString('id-ID')}`
               )}
             </h3>
           </div>
@@ -812,6 +854,12 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                       <TrendingUp className="h-3.5 w-3.5 text-emerald-600" /> 
                       <span><b className="text-zinc-900 font-extrabold">Total Omset Gabungan:</b> Rp{(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}</span>
                     </p>
+                    <p className="text-xs text-zinc-700 flex items-center gap-2 pl-[22px]">
+                      <span><b className="text-zinc-900 font-bold">Total Cash:</b> Rp{(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}</span>
+                    </p>
+                    <p className="text-xs text-zinc-700 flex items-center gap-2 pl-[22px]">
+                      <span><b className="text-zinc-900 font-bold">Total Transfer:</b> Rp{(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}</span>
+                    </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2">
                       <ShoppingBag className="h-3.5 w-3.5 text-zinc-500" /> 
                       <span><b className="text-zinc-900 font-extrabold">Total Pesanan:</b> {adminMetrics?.totalTransactions || 0} Selesai</span>
@@ -902,6 +950,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                   const txt = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
                     `*Tanggal:* ${hari}, ${tglText}\n` +
                     `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
                     `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
                     `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
                     `*Rincian Omset per Cabang:*\n` +
@@ -945,9 +995,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                     });
                   });
                   
-                  const txt = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
+                  const txtUrl = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
                     `*Tanggal:* ${hari}, ${tglText}\n` +
                     `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
+                    `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
                     `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
                     `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
                     `*Rincian Omset per Cabang:*\n` +
@@ -955,7 +1007,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                     rincianPesananText + `\n` +
                     `Terima kasih!`;
 
-                  const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(txt)}`;
+                  const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(txtUrl)}`;
                   window.open(url, '_blank');
                   setToastType('success');
                   setToastMessage("Berhasil dibagikan ke WhatsApp!");

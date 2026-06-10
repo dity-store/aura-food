@@ -250,6 +250,29 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  
+  type SortOrder = 'newest' | 'oldest';
+  interface AdminFilterState {
+    branch: string;
+    category: string;
+    sortOrder: SortOrder;
+    date: string | null;
+    sifat: 'All' | 'Pemasukan' | 'Pengeluaran';
+    menu: string;
+    statusFilter: string;
+  }
+  const getDefaultAdminFilterState = (): AdminFilterState => ({
+    branch: 'All',
+    category: 'All',
+    sortOrder: 'newest',
+    date: null,
+    sifat: 'All',
+    menu: 'All',
+    statusFilter: 'All'
+  });
+  const [appliedAdminFilter, setAppliedAdminFilter] = useState<AdminFilterState>(getDefaultAdminFilterState());
+  const [tempAdminFilter, setTempAdminFilter] = useState<AdminFilterState>(getDefaultAdminFilterState());  
   
   // Pull to Refresh state
   const [pullDistance, setPullDistance] = useState(0);
@@ -267,7 +290,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   useEffect(() => {
     const handleAndroidBack = (e: Event) => {
       const customEvt = e as CustomEvent;
-      if (showModal !== null) {
+      if (showFilterModal) {
+        setShowFilterModal(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (showModal !== null) {
         setShowModal(null);
         customEvt.detail.handled = true;
         customEvt.preventDefault();
@@ -288,7 +315,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     };
     window.addEventListener('aura-backpress', handleAndroidBack);
     return () => window.removeEventListener('aura-backpress', handleAndroidBack);
-  }, [showModal, selectedIds, isSearchActive, activeModule]);
+  }, [showFilterModal, showModal, selectedIds, isSearchActive, activeModule]);
   
   // Basic Form States
   const [formData, setFormData] = useState<any>({ STATUS: 'Tersedia' });
@@ -575,14 +602,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     if (!session.admin.loaded) {
       loadData();
     } else {
-      // Use cached offline data state if available, do not fetch immediately
-      const cached = localStorage.getItem('cached_master_data');
-      if (cached) {
-        try {
-          const m = JSON.parse(cached);
-          setMaster(m);
-        } catch (e) {}
-      }
+      getMasterData().then(setMaster).catch(() => {});
       const cachedKas = localStorage.getItem('cached_buku_kas_data_ALL');
       if (cachedKas) {
         try {
@@ -831,7 +851,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       }
 
       setSelectedIds([]);
-      showToastBanner('Data berhasil dihapus dari cloud dan lokal');
+      showToastBanner('Data berhasil dihapus dari sistem');
     } catch (e: any) {
       alert('Gagal menghapus data: ' + e.message);
     }
@@ -869,6 +889,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     setSearchQuery('');
     setIsSearchActive(false);
     setSelectedIds([]); // Clear selection when switching modules
+    setAppliedAdminFilter(getDefaultAdminFilterState()); // Auto reset filter
+    setTempAdminFilter(getDefaultAdminFilterState());
     setActiveModule(id);
     
     try {
@@ -1298,8 +1320,31 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     };
   };
 
+  const parseToDate = (cellValue: any): Date => {
+    if (!cellValue) return new Date(0);
+    if (cellValue instanceof Date) return cellValue;
+    let str = String(cellValue).trim().substring(0, 10);
+    if (str.includes('/')) {
+      const p = str.split('/');
+      if (p.length === 3) return new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+    }
+    return new Date(cellValue);
+  };
+
   // Filtering states mapping
   const filteredBukuKas = bukuKasList.map(parseKasItem).filter(item => {
+    if (appliedAdminFilter.branch !== 'All' && String(item.cabang) !== appliedAdminFilter.branch) return false;
+    if (appliedAdminFilter.sifat === 'Pemasukan' && !item.isDebit) return false;
+    if (appliedAdminFilter.sifat === 'Pengeluaran' && item.isDebit) return false;
+    if (appliedAdminFilter.date) {
+      try {
+        const itemDate = parseToDate(item.tanggal);
+        const y = itemDate.getFullYear();
+        const m = String(itemDate.getMonth() + 1).padStart(2, '0');
+        const d = String(itemDate.getDate()).padStart(2, '0');
+        if (`${y}-${m}-${d}` !== appliedAdminFilter.date) return false;
+      } catch (e) { return false; }
+    }
     const query = searchQuery.toLowerCase();
     return (
       (item.jenis || '').toLowerCase().includes(query) ||
@@ -1307,6 +1352,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       (item.cabang || '').toLowerCase().includes(query) ||
       String(item.nominal || item.debit || item.kredit || '').includes(query)
     );
+  }).sort((a,b) => {
+    const da = parseToDate(a.tanggal).getTime();
+    const db = parseToDate(b.tanggal).getTime();
+    return appliedAdminFilter.sortOrder === 'oldest' ? da - db : db - da;
   });
 
   const filteredCabang = (master?.cabang || []).filter(item => {
@@ -1327,6 +1376,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   });
 
   const filteredMenu = (master?.menu || []).filter(item => {
+    if (appliedAdminFilter.category !== 'All' && String(item.ID_KATEGORI) !== appliedAdminFilter.category) return false;
     const query = searchQuery.toLowerCase();
     return (
       (item.NAMA_MENU || '').toLowerCase().includes(query) ||
@@ -1336,6 +1386,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   });
 
   const filteredVarian = (master?.varian || []).filter(item => {
+    if (appliedAdminFilter.menu !== 'All' && String(item.ID_MENU) !== appliedAdminFilter.menu) return false;
+    if (appliedAdminFilter.statusFilter !== 'All' && String(item.STATUS).toLowerCase() !== appliedAdminFilter.statusFilter.toLowerCase()) return false;
     const query = searchQuery.toLowerCase();
     return (
       (item.NAMA_VARIAN || '').toLowerCase().includes(query) ||
@@ -1346,31 +1398,68 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   });
 
   const filteredInventaris = (Array.isArray(inventarisData) ? inventarisData : []).filter(item => {
+    if (appliedAdminFilter.branch !== 'All' && String(item.CABANG || item.ID_CABANG) !== appliedAdminFilter.branch) return false;
+    if (appliedAdminFilter.date) {
+      try {
+        const itemDate = parseToDate(item.TANGGAL || item.tanggal);
+        const y = itemDate.getFullYear();
+        const m = String(itemDate.getMonth() + 1).padStart(2, '0');
+        const d = String(itemDate.getDate()).padStart(2, '0');
+        if (`${y}-${m}-${d}` !== appliedAdminFilter.date) return false;
+      } catch (e) { return false; }
+    }
     const query = searchQuery.toLowerCase();
     return (
       (item.NAMA_BARANG || '').toLowerCase().includes(query) ||
       (item.KETERANGAN || '').toLowerCase().includes(query) ||
       (item.PIC || '').toLowerCase().includes(query)
     );
+  }).sort((a,b) => {
+    const da = parseToDate(a.TANGGAL || a.tanggal).getTime();
+    const db = parseToDate(b.TANGGAL || b.tanggal).getTime();
+    return appliedAdminFilter.sortOrder === 'oldest' ? da - db : db - da;
   });
 
   const filteredShift = (Array.isArray(shiftData) ? shiftData : []).filter(item => {
+    if (appliedAdminFilter.branch !== 'All' && String(item.CABANG || item.ID_CABANG) !== appliedAdminFilter.branch) return false;
+    if (appliedAdminFilter.date) {
+      try {
+        const itemDate = parseToDate(item.TANGGAL || item.tanggal);
+        const y = itemDate.getFullYear();
+        const m = String(itemDate.getMonth() + 1).padStart(2, '0');
+        const d = String(itemDate.getDate()).padStart(2, '0');
+        if (`${y}-${m}-${d}` !== appliedAdminFilter.date) return false;
+      } catch (e) { return false; }
+    }
     const query = searchQuery.toLowerCase();
     return (
       (item.NAMA_STAFF || '').toLowerCase().includes(query) ||
       (item.ALASAN || '').toLowerCase().includes(query) ||
       (item.PENGGANTI || '').toLowerCase().includes(query)
     );
+  }).sort((a,b) => {
+    const da = parseToDate(a.TANGGAL || a.tanggal).getTime();
+    const db = parseToDate(b.TANGGAL || b.tanggal).getTime();
+    return appliedAdminFilter.sortOrder === 'oldest' ? da - db : db - da;
   });
 
+  const activeFilterCount = (appliedAdminFilter.branch !== 'All' ? 1 : 0) + 
+                            (appliedAdminFilter.category !== 'All' ? 1 : 0) +
+                            (appliedAdminFilter.sortOrder !== 'newest' ? 1 : 0) +
+                            (appliedAdminFilter.date ? 1 : 0) +
+                            (appliedAdminFilter.sifat !== 'All' ? 1 : 0) +
+                            (appliedAdminFilter.menu !== 'All' ? 1 : 0) +
+                            (appliedAdminFilter.statusFilter !== 'All' ? 1 : 0);
+
   let filteredListLength = 0;
-  if (activeModule === 'kas') filteredListLength = filteredBukuKas.length;
-  else if (activeModule === 'cabang') filteredListLength = filteredCabang.length;
-  else if (activeModule === 'kategori') filteredListLength = filteredKategori.length;
-  else if (activeModule === 'menu') filteredListLength = filteredMenu.length;
-  else if (activeModule === 'varian') filteredListLength = filteredVarian.length;
-  else if (activeModule === 'inventaris') filteredListLength = filteredInventaris.length;
-  else if (activeModule === 'shift') filteredListLength = filteredShift.length;
+  let originalListLength = 0;
+  if (activeModule === 'kas') { filteredListLength = filteredBukuKas.length; originalListLength = bukuKasList.length; }
+  else if (activeModule === 'cabang') { filteredListLength = filteredCabang.length; originalListLength = master?.cabang?.length || 0; }
+  else if (activeModule === 'kategori') { filteredListLength = filteredKategori.length; originalListLength = master?.kategori?.length || 0; }
+  else if (activeModule === 'menu') { filteredListLength = filteredMenu.length; originalListLength = master?.menu?.length || 0; }
+  else if (activeModule === 'varian') { filteredListLength = filteredVarian.length; originalListLength = master?.varian?.length || 0; }
+  else if (activeModule === 'inventaris') { filteredListLength = filteredInventaris.length; originalListLength = inventarisData.length; }
+  else if (activeModule === 'shift') { filteredListLength = filteredShift.length; originalListLength = shiftData.length; }
 
   return (
     <SelectionContext.Provider value={{ selectedIds, isSelectionMode, toggleSelection, handleEditItem, getItemId }}>
@@ -1459,6 +1548,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 <>
                   <div className="flex items-center gap-3">
                     <button 
+                      disabled={isUniversalLoading}
                       onClick={() => {
                         if (isSelectionMode) {
                           setSelectedIds([]);
@@ -1466,7 +1556,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           setActiveModule(null);
                         }
                       }} 
-                      className={`p-2.5 rounded-xl transition cursor-pointer active:scale-95 shrink-0 ${isSelectionMode ? 'bg-red-50 text-red-650 hover:bg-red-100' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-650'}`}
+                      className={`p-2.5 rounded-xl transition cursor-pointer active:scale-95 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${isSelectionMode ? 'bg-red-50 text-red-650 hover:bg-red-100' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-650'}`}
                     >
                       {isSelectionMode ? <X className="h-4.5 w-4.5" /> : <ArrowLeft className="h-4.5 w-4.5" />}
                     </button>
@@ -1492,8 +1582,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                   <div className="flex items-center gap-2">
                     {isSelectionMode ? (
                        <button
+                         disabled={isUniversalLoading}
                          onClick={handleDeleteSelected}
-                         className="p-2.5 bg-red-100/90 hover:bg-red-200 rounded-xl text-red-700 transition cursor-pointer active:scale-95 shrink-0 animate-in fade-in zoom-in-95"
+                         className="p-2.5 bg-red-100/90 hover:bg-red-200 rounded-xl text-red-700 transition cursor-pointer active:scale-95 shrink-0 animate-in fade-in zoom-in-95 disabled:opacity-50 disabled:cursor-not-allowed"
                        >
                          <Trash2 className="h-4.5 w-4.5" />
                        </button>
@@ -1505,12 +1596,22 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                          >
                            <Search className="h-4 w-4" />
                          </button>
-                         <button 
-                           className="p-2.5 bg-zinc-100 hover:bg-zinc-200 rounded-xl text-zinc-700 transition cursor-pointer active:scale-95 shrink-0"
-                           onClick={() => alert('Fitur penyaringan tersedia di update mendatang')}
-                         >
-                           <Filter className="h-4 w-4" />
-                         </button>
+                         {(activeModule === 'kas' || activeModule === 'inventaris' || activeModule === 'shift' || activeModule === 'menu' || activeModule === 'varian') && (
+                           <button 
+                             className="p-2.5 rounded-xl transition relative cursor-pointer active:scale-95 shrink-0 bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                             onClick={() => {
+                               setTempAdminFilter(appliedAdminFilter);
+                               setShowFilterModal(true);
+                             }}
+                           >
+                             <Filter className="h-4 w-4" />
+                             {activeFilterCount > 0 && (
+                               <span className="absolute -top-1 -right-1 h-4 w-4 bg-red-700 text-white flex items-center justify-center rounded-full text-[9px] font-black pointer-events-none">
+                                 {activeFilterCount}
+                               </span>
+                             )}
+                           </button>
+                         )}
                        </>
                     )}
                   </div>
@@ -1536,7 +1637,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               className="flex-1 overflow-y-auto p-4 sm:p-6 bg-zinc-50 pb-28 relative"
             >
               
-              {isSearchActive && searchQuery && filteredListLength === 0 ? (
+              {originalListLength > 0 && filteredListLength === 0 ? (
                 <div className="max-w-4xl mx-auto py-16">
                   <div className="flex items-center justify-center flex-col text-zinc-400 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                     <Search className="h-12 w-12 mb-4 opacity-70 text-zinc-300" />
@@ -1546,10 +1647,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       onClick={() => {
                         setIsSearchActive(false);
                         setSearchQuery('');
+                        setAppliedAdminFilter(getDefaultAdminFilterState());
                       }}
                       className="bg-zinc-50 text-zinc-600 hover:bg-zinc-100 font-black text-[10px] px-6 py-3 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-widest cursor-pointer mt-4 border border-zinc-200"
                     >
-                      <Trash2 className="h-4 w-4 text-red-700" /> Reset Carian
+                      <Trash2 className="h-4 w-4 text-red-700" /> Reset Filter
                     </button>
                   </div>
                 </div>
@@ -1561,7 +1663,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                       <Briefcase className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
                       <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Buku Kas Kosong</p>
-                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan transaksi manual. Riwayat dari cloud dapat dilihat di Laporan.</p>
+                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan transaksi manual. Riwayat dari sistem pusat dapat dilihat di Laporan.</p>
                     </div>
                   ) : (
                     <div className="grid gap-3.5">
@@ -1607,7 +1709,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                       <Building className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
                       <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Cabang Kosong</p>
-                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada data cabang yang terdaftar di sistem lokal.</p>
+                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada data cabang yang terdaftar di sistem pusat.</p>
                     </div>
                   ) : (
                     <div className="grid gap-3.5">
@@ -1917,7 +2019,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
-                      <select required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                      <select 
+                        required 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        value={
+                          master?.cabang?.find(c => 
+                            String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase() ||
+                            String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase()
+                          )?.ID_CABANG || ''
+                        } 
+                        onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
                         <option value="">-- Pilih Cabang --</option>
                         {master?.cabang?.map(c => (
                           <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
@@ -1980,7 +2091,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
-                      <select required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                      <select 
+                        required 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        value={
+                          master?.cabang?.find(c => 
+                            String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase() ||
+                            String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase()
+                          )?.ID_CABANG || ''
+                        } 
+                        onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
                         <option value="">-- Pilih Cabang --</option>
                         {master?.cabang?.map(c => (
                           <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
@@ -2017,7 +2137,19 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       </div>
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Cabang</label>
-                        <select required className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all" value={formData.cabang || formData.CABANG || ''} onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
+                        <select 
+                          required 
+                          className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all" 
+                          value={
+                            master?.cabang?.find(c => 
+                              String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase() ||
+                              String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase()
+                            )?.ID_CABANG || ''
+                          }
+                          onChange={e => {
+                            const val = e.target.value;
+                            setFormData({...formData, cabang: val, CABANG: val});
+                          }}>
                           <option value="">-- Pilih Cabang --</option>
                           {master?.cabang?.map(c => (
                             <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
@@ -2279,6 +2411,148 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
         </div>
       )}
 
+      {showFilterModal && (
+        <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm flex justify-end animate-in fade-in duration-200" onClick={() => setShowFilterModal(false)}>
+          <div className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col animate-in slide-in-from-right-1/2" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 pt-safe">
+              <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight flex items-center gap-2">
+                <Filter className="h-4 w-4 text-red-700" /> Filter
+              </h3>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setTempAdminFilter(getDefaultAdminFilterState())}
+                  className="p-1.5 bg-white hover:bg-red-50 text-red-700 hover:text-red-900 rounded-lg transition shadow-sm border border-zinc-200 cursor-pointer"
+                  title="Hapus Filter"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+                <button 
+                  onClick={() => setShowFilterModal(false)}
+                  className="p-1.5 bg-white hover:bg-zinc-100 rounded-lg text-zinc-700 transition shadow-sm border border-zinc-200 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-4 flex-1 overflow-y-auto space-y-6">
+              {(activeModule === 'kas' || activeModule === 'inventaris' || activeModule === 'shift') && (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Cabang</label>
+                  <select 
+                    value={tempAdminFilter.branch}
+                    onChange={(e) => setTempAdminFilter({...tempAdminFilter, branch: e.target.value})}
+                    className="w-full p-2.5 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 focus:ring-2 focus:ring-red-600 focus:border-red-600 transition outline-none bg-white cursor-pointer"
+                  >
+                    <option value="All">Semua Cabang</option>
+                    {master?.cabang?.map(c => (
+                      <option key={c.ID_CABANG} value={String(c.ID_CABANG)}>{c.NAMA_CABANG}</option>
+                    ))}
+                  </select>
+                 </div>
+              )}
+              
+              {activeModule === 'menu' && (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Kategori</label>
+                  <select 
+                    value={tempAdminFilter.category}
+                    onChange={(e) => setTempAdminFilter({...tempAdminFilter, category: e.target.value})}
+                    className="w-full p-2.5 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 focus:ring-2 focus:ring-red-600 focus:border-red-600 transition outline-none bg-white cursor-pointer"
+                  >
+                    <option value="All">Semua Kategori</option>
+                    {master?.kategori?.map(c => (
+                      <option key={c.ID_KATEGORI} value={String(c.ID_KATEGORI)}>{c.NAMA_KATEGORI}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {activeModule === 'varian' && (
+                <>
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Menu</label>
+                    <select 
+                      value={tempAdminFilter.menu}
+                      onChange={(e) => setTempAdminFilter({...tempAdminFilter, menu: e.target.value})}
+                      className="w-full p-2.5 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 focus:ring-2 focus:ring-red-600 focus:border-red-600 transition outline-none bg-white cursor-pointer"
+                    >
+                      <option value="All">Semua Menu</option>
+                      {master?.menu?.map(m => (
+                        <option key={m.ID_MENU} value={String(m.ID_MENU)}>{m.NAMA_MENU}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-3 mt-4">
+                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Status</label>
+                    <select 
+                      value={tempAdminFilter.statusFilter}
+                      onChange={(e) => setTempAdminFilter({...tempAdminFilter, statusFilter: e.target.value})}
+                      className="w-full p-2.5 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 focus:ring-2 focus:ring-red-600 focus:border-red-600 transition outline-none bg-white cursor-pointer"
+                    >
+                      <option value="All">Semua Status</option>
+                      <option value="Tersedia">Tersedia</option>
+                      <option value="Tidak Tersedia">Tidak Tersedia</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {(activeModule === 'kas' || activeModule === 'inventaris' || activeModule === 'shift') && (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Tanggal</label>
+                  <input 
+                    type="date"
+                    value={tempAdminFilter.date || ''}
+                    onChange={(e) => setTempAdminFilter({...tempAdminFilter, date: e.target.value || null})}
+                    className="w-full p-2.5 rounded-xl border border-zinc-200 text-xs text-zinc-700 focus:ring-2 focus:ring-red-600 focus:border-red-600 transition outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Urutkan</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button 
+                    onClick={() => setTempAdminFilter({...tempAdminFilter, sortOrder: 'newest'})}
+                    className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempAdminFilter.sortOrder === 'newest' ? 'bg-red-50 border-red-600 text-red-700' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Terbaru</button>
+                  <button 
+                    onClick={() => setTempAdminFilter({...tempAdminFilter, sortOrder: 'oldest'})}
+                    className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempAdminFilter.sortOrder === 'oldest' ? 'bg-red-50 border-red-600 text-red-700' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Terlama</button>
+                </div>
+              </div>
+
+              {activeModule === 'kas' && (
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Sifat</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button 
+                      onClick={() => setTempAdminFilter({...tempAdminFilter, sifat: 'All'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempAdminFilter.sifat === 'All' ? 'bg-red-50 border-red-600 text-red-700' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Semua</button>
+                    <button 
+                      onClick={() => setTempAdminFilter({...tempAdminFilter, sifat: 'Pemasukan'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempAdminFilter.sifat === 'Pemasukan' ? 'bg-emerald-50 border-emerald-600 text-emerald-700' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Pemasukan</button>
+                    <button 
+                       onClick={() => setTempAdminFilter({...tempAdminFilter, sifat: 'Pengeluaran'})}
+                       className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempAdminFilter.sifat === 'Pengeluaran' ? 'bg-rose-50 border-rose-600 text-rose-700' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Pengeluaran</button>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 border-t border-zinc-200 bg-zinc-50 pb-safe">
+              <button 
+                disabled={JSON.stringify(tempAdminFilter) === JSON.stringify(appliedAdminFilter)}
+                onClick={() => { setAppliedAdminFilter(tempAdminFilter); setShowFilterModal(false); }}
+                className="w-full bg-zinc-900 hover:bg-black text-white font-extrabold text-xs py-3.5 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed uppercase tracking-wider cursor-pointer"
+              >
+                Terapkan Filter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toastMessage && (
         <div style={{ zIndex: 100000001 }} className="fixed top-4 left-1/2 -translate-x-1/2 animate-in slide-in-from-top-8 duration-500 w-full max-w-sm px-4">
           <div className="px-5 py-3 rounded-[20px] bg-zinc-950 text-white flex items-center justify-center gap-3 shadow-2xl border border-zinc-800">
@@ -2309,23 +2583,39 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  confirmState.onCancel();
+                disabled={isUniversalLoading}
+                onClick={async () => {
+                  if (confirmState.onCancel.constructor.name === "AsyncFunction") {
+                      await confirmState.onCancel();
+                  } else {
+                      confirmState.onCancel();
+                  }
                   setConfirmState(prev => ({ ...prev, isOpen: false }));
                 }}
-                className="flex-1 py-3.5 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-bold text-xs uppercase tracking-widest transition cursor-pointer active:scale-95"
+                className="flex-1 py-3.5 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-bold text-xs uppercase tracking-widest transition cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Batal
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  confirmState.onConfirm();
-                  setConfirmState(prev => ({ ...prev, isOpen: false }));
+                disabled={isUniversalLoading}
+                onClick={async () => {
+                  try {
+                      if (confirmState.onConfirm.constructor.name === "AsyncFunction") {
+                          await confirmState.onConfirm();
+                      } else {
+                          const result = confirmState.onConfirm();
+                          if (result instanceof Promise) {
+                              await result;
+                          }
+                      }
+                  } finally {
+                      setConfirmState(prev => ({ ...prev, isOpen: false }));
+                  }
                 }}
-                className={`flex-1 py-3.5 rounded-xl text-white font-extrabold text-xs uppercase tracking-widest transition cursor-pointer active:scale-95 ${confirmState.type === 'delete' ? 'bg-red-750 hover:bg-red-800' : 'bg-zinc-900 hover:bg-black'}`}
+                className={`flex-1 py-3.5 rounded-xl text-white font-extrabold text-xs uppercase tracking-widest transition cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${confirmState.type === 'delete' ? 'bg-red-750 hover:bg-red-800' : 'bg-zinc-900 hover:bg-black'}`}
               >
-                Ya, Lanjut
+                {isUniversalLoading ? 'Memproses...' : 'Ya, Lanjut'}
               </button>
             </div>
           </div>

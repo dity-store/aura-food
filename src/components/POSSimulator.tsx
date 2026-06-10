@@ -116,6 +116,7 @@ export default function POSSimulator({
   // Layout states for Create Tx mode
   const [showCatalogModal, setShowCatalogModal] = useState<boolean>(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState<boolean>(false);
+  const [showPrinterWarning, setShowPrinterWarning] = useState<boolean>(false);
   const [addedItemMessage, setAddedItemMessage] = useState<string | null>(null);
 
   // Custom Modals
@@ -185,6 +186,14 @@ export default function POSSimulator({
         setAlertMessage(null);
         customEvt.detail.handled = true;
         customEvt.preventDefault();
+      } else if (showPrinterWarning) {
+        setShowPrinterWarning(false);
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
+      } else if (searchQuery !== '') {
+        setSearchQuery('');
+        customEvt.detail.handled = true;
+        customEvt.preventDefault();
       }
     };
     window.addEventListener('aura-backpress', handleAndroidBack);
@@ -199,7 +208,9 @@ export default function POSSimulator({
     selectedTransactionForKasir,
     confirmDiscardCart,
     confirmDeleteId,
-    alertMessage
+    alertMessage,
+    showPrinterWarning,
+    searchQuery
   ]);
   
   const handleConnectPrinter = async () => {
@@ -499,10 +510,8 @@ export default function POSSimulator({
     window.open(waUrl, '_blank');
   };
 
-  const handleCheckout = async () => {
-    if (activeBranch === 'ADMIN') return;
-    if (cart.length === 0) return;
-
+  const proceedCheckout = async () => {
+    setShowPrinterWarning(false);
     // REVERTED ID FORMAT: Simpler format as requested
     const transactionId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const now = new Date();
@@ -565,6 +574,21 @@ export default function POSSimulator({
       console.error("Gagal memproses checkout", err);
       setAlertMessage("Terjadi kesalahan saat menyimpan transaksi (IndexedDB).");
     }
+  };
+
+  const handleCheckout = async () => {
+    if (activeBranch === 'ADMIN') return;
+    if (cart.length === 0) return;
+
+    if (!thermalPrinter) {
+      const isFirstOrderToday = history.filter(tx => new Date(tx.timestamp).toDateString() === new Date().toDateString()).length === 0;
+      if (isFirstOrderToday) {
+        setShowPrinterWarning(true);
+        return;
+      }
+    }
+
+    proceedCheckout();
   };
 
   const handleSearchChange = (val: string) => {
@@ -1202,6 +1226,32 @@ export default function POSSimulator({
               >
                 Mengerti
               </button>
+            </div>
+          </div>
+        )}
+
+        {showPrinterWarning && (
+          <div style={{ zIndex: 10000002 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPrinterWarning(false)}>
+            <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+              <div className="h-12 w-12 rounded-full bg-red-100 text-red-700 flex items-center justify-center mx-auto mb-4 border border-red-200">
+                <Printer className="h-6 w-6" />
+              </div>
+              <h3 className="text-sm font-black text-zinc-950 uppercase mb-2">Peringatan: Printer Belum Terhubung!</h3>
+              <p className="text-xs text-zinc-600 mb-6 leading-relaxed">Printer belum tersambung ke HP/Tablet kamu nih. Nanti struck tidak akan keluar tercetak ya, tapi pesanan tetap aman tercatat sistem. Yakin mau lanjut checkout pesanan ini tanpa cetak struk?</p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowPrinterWarning(false)} 
+                  className="flex-1 py-3 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-bold text-xs uppercase cursor-pointer transition"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={proceedCheckout} 
+                  className="flex-1 py-3 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-xs uppercase cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  Lanjut Tanpa Struk
+                </button>
+              </div>
             </div>
           </div>
         )}

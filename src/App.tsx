@@ -45,6 +45,15 @@ import {
 const logoCache = new Image();
 logoCache.src = '/logo.png';
 
+if (typeof window !== 'undefined' && !sessionStorage.getItem('AURA_APP_OPENED')) {
+  sessionStorage.setItem('AURA_APP_OPENED', 'true');
+  localStorage.removeItem('AURA_DASHBOARD_FILTER_BRANCH');
+  localStorage.removeItem('AURA_DASHBOARD_FILTER_DATE');
+  localStorage.removeItem('AURA_REPORTS_FILTER_CABANG');
+  localStorage.removeItem('AURA_REPORTS_FILTER_PERIODE');
+  localStorage.removeItem('AURA_REPORTS_FILTER_TYPE');
+}
+
 export default function App() {
   const [activeBranch, setActiveBranch] = useState<string>(() => localStorage.getItem('AURA_FOOD_BRANCH') || '');
   const [storedBranchName, setStoredBranchName] = useState<string>(() => localStorage.getItem('AURA_FOOD_BRANCH_NAME') || '');
@@ -1264,15 +1273,6 @@ export default function App() {
       )}
 
     </div>
-    
-    {/* Exit Warning Toast */}
-    {exitWarning && (
-      <div className="fixed bottom-20 left-4 right-4 z-[9999] flex justify-center pointer-events-none animate-in fade-in slide-in-from-bottom-5">
-        <div className="bg-zinc-900/90 backdrop-blur-md text-white text-xs font-semibold px-4 py-3 rounded-full shadow-lg border border-white/10">
-          Tekan sekali lagi untuk keluar
-        </div>
-      </div>
-    )}
     </>
   );
 }
