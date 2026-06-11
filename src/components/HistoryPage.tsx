@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Transaction, Cabang } from '../types';
 import { getTransactions, getTransactionsFromGAS } from '../utils/db';
-import { Search, Filter, X, ArrowLeft, ReceiptText, ChevronLeft, ChevronRight, CalendarClock, Printer, Trash2, Database, Plus } from 'lucide-react';
+import { Search, Filter, X, ArrowLeft, ReceiptText, ChevronLeft, ChevronRight, CalendarClock, Printer, Trash2, Database, Plus, RefreshCw } from 'lucide-react';
 import ReceiptThermal from './ReceiptThermal';
 
 type SortOrder = 'newest' | 'oldest';
@@ -33,6 +33,9 @@ const getDefaultFilterState = (initialBranchFilter?: string): HistoryFilterState
   };
 };
 
+let historyInitialFetchDone = new Set<string>();
+let historyFetchingInProgress = new Set<string>();
+
 export default function HistoryPage({ activeBranch, cabangList, onSelectTransaction, onBack, onCreateTransaction, refreshTrigger, initialBranchFilter }: HistoryPageProps) {
   const [history, setHistory] = useState<Transaction[]>([]);
   const [isSearchHistoryActive, setIsSearchHistoryActive] = useState<boolean>(false);
@@ -41,7 +44,13 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
   const [appliedHistoryFilter, setAppliedHistoryFilter] = useState<HistoryFilterState>(() => getDefaultFilterState(initialBranchFilter));
   const [tempHistoryFilter, setTempHistoryFilter] = useState<HistoryFilterState>(() => getDefaultFilterState(initialBranchFilter));
   const [historyModalTx, setHistoryModalTx] = useState<Transaction | null>(null);
+  const [isFetchingHistory, setIsFetchingHistory] = useState<boolean>(false);
   const lastFetchParamsRef = useRef<string>('');
+
+  // Pull to refresh gestures
+  const [startY, setStartY] = useState<number | null>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
   // Back button interception for Android
   useEffect(() => {
@@ -66,32 +75,94 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
     return () => window.removeEventListener('aura-backpress', handleAndroidBack);
   }, [historyModalTx, showHistoryFilter, isSearchHistoryActive]);
 
+  const handleForceRefresh = async () => {
+    if (!navigator.onLine) return;
+    const fetchBranch = activeBranch === 'ADMIN' ? (appliedHistoryFilter.branch || 'All') : activeBranch;
+    setIsFetchingHistory(true);
+    try {
+      const remoteTxs = await getTransactionsFromGAS(fetchBranch);
+      if (remoteTxs) {
+         const { saveTransaction, clearSyncedTransactions } = await import('../utils/db');
+         
+         // Clear local synced transactions for this scope to strictly "overwrite"
+         await clearSyncedTransactions(fetchBranch === 'All' ? undefined : fetchBranch);
+         
+         // Save the new ones
+         for (const rt of remoteTxs) {
+           await saveTransaction(rt);
+         }
+         
+         // Ensure we mark it as fetched
+         historyInitialFetchDone.add(fetchBranch);
+         
+         // Reload after saving to DB to have consistent state
+         const refreshed = await getTransactions();
+         let displayTxs = [...refreshed];
+         if (activeBranch !== 'ADMIN') {
+           displayTxs = displayTxs.filter(tx => String(tx.cabang) === activeBranch);
+         }
+         displayTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+         setHistory(displayTxs);
+      }
+    } catch (e) {
+      console.warn("History remote fetch failed during force refresh:", e);
+    } finally {
+      setIsFetchingHistory(false);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const isScrollAtTop = !mainScrollRef.current || mainScrollRef.current.scrollTop === 0;
+    if (isScrollAtTop && window.scrollY === 0) {
+      setStartY(e.touches[0].clientY);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (startY !== null) {
+      const pull = e.touches[0].clientY - startY;
+      if (pull > 0) {
+        setPullDistance(Math.min(pull / 2, 100));
+        e.preventDefault();
+      }
+    }
+  };
+
+  const handleTouchEnd = async () => {
+    if (pullDistance > 70) {
+       await handleForceRefresh();
+    }
+    setPullDistance(0);
+    setStartY(null);
+  };
+
   useEffect(() => {
     async function loadData() {
       try {
         const fetchBranch = activeBranch === 'ADMIN' ? (appliedHistoryFilter.branch || 'All') : activeBranch;
-        const currentParamsKey = JSON.stringify({
-          activeBranch,
-          fetchBranch,
-          refreshTrigger
-        });
-
-        // Optimization: if params identical, don't fetch remote unless refreshTrigger changed
-        const skipRemote = lastFetchParamsRef.current === currentParamsKey;
-
-        let finalTxs: Transaction[] = [];
+        
+        if (!activeBranch || activeBranch === '' || !fetchBranch || fetchBranch === '') {
+          return;
+        }
         
         // 1. Get all local first (including pending_sync)
         const allLocal = await getTransactions();
         let displayTxs = [...allLocal];
+        
+        if (activeBranch !== 'ADMIN') {
+          displayTxs = displayTxs.filter(tx => String(tx.cabang) === activeBranch);
+        }
+        
+        displayTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setHistory(displayTxs);
 
-        // 2. Fetch Remote and Overwrite Local synced if needed
-        if (activeBranch === 'ADMIN' && !skipRemote) {
+        // 2. Fetch Remote only if this is the first time for this branch during session, and online
+        if (!historyInitialFetchDone.has(fetchBranch) && !historyFetchingInProgress.has(fetchBranch) && navigator.onLine) {
+          historyFetchingInProgress.add(fetchBranch);
+          setIsFetchingHistory(true);
           try {
             const remoteTxs = await getTransactionsFromGAS(fetchBranch);
             if (remoteTxs) {
-               // Per user request: "Menimpa setiap kali get data, bukan ditumpuk"
-               // We keep local 'pending_sync' but replace 'synced' for the fetched branch scope
                const { saveTransaction, clearSyncedTransactions } = await import('../utils/db');
                
                // 1. Clear local synced transactions for this scope to strictly "overwrite"
@@ -102,24 +173,26 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                  await saveTransaction(rt);
                }
                
-               // Mark as fetched
-               lastFetchParamsRef.current = currentParamsKey;
-               
                // Reload after saving to DB to have consistent state
                const refreshed = await getTransactions();
-               displayTxs = refreshed;
+               let updatedTxs = [...refreshed];
+               if (activeBranch !== 'ADMIN') {
+                 updatedTxs = updatedTxs.filter(tx => String(tx.cabang) === activeBranch);
+               }
+               updatedTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+               setHistory(updatedTxs);
             }
+            historyInitialFetchDone.add(fetchBranch);
           } catch (e) {
-            console.warn("History remote fetch failed:", e);
+            console.warn("History remote fetch failed on first load:", e);
+          } finally {
+            historyFetchingInProgress.delete(fetchBranch);
+            setIsFetchingHistory(false);
           }
-        } else if (activeBranch !== 'ADMIN') {
-          displayTxs = allLocal.filter(tx => String(tx.cabang) === activeBranch);
         }
-        
-        displayTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setHistory(displayTxs);
       } catch (err) {
         console.error("Error loading history:", err);
+        setIsFetchingHistory(false);
       }
     }
     loadData();
@@ -201,6 +274,14 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
 
               <div className="flex items-center gap-2">
                 <button
+                  onClick={handleForceRefresh}
+                  className="p-2 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-zinc-700 transition cursor-pointer active:scale-95"
+                  title="Segarkan Riwayat"
+                  disabled={isFetchingHistory}
+                >
+                  <RefreshCw className={`h-4 w-4 ${isFetchingHistory ? 'animate-spin' : ''}`} />
+                </button>
+                <button
                   onClick={() => setIsSearchHistoryActive(true)}
                   className="p-2 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-zinc-700 transition cursor-pointer active:scale-95"
                 >
@@ -223,8 +304,32 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto w-full pb-safe bg-neutral-50 relative">
-        <div className="max-w-2xl mx-auto p-4 space-y-3">
+      <main 
+        ref={mainScrollRef}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        className="flex-1 overflow-y-auto w-full pb-safe bg-neutral-50 relative selection:bg-red-100 selection:text-red-900"
+      >
+        {isFetchingHistory && (
+          <div className="absolute inset-0 z-[60] bg-white/50 backdrop-blur-[2px] flex flex-col items-center justify-center">
+             <div className="bg-white p-6 rounded-3xl border border-zinc-200/60 shadow-xl flex flex-col items-center gap-3 animate-in fade-in zoom-in-95">
+                <RefreshCw className="h-8 w-8 text-red-750 animate-spin" />
+                <p className="text-xs font-bold text-zinc-700 uppercase tracking-widest animate-pulse">Menghubungkan Data...</p>
+             </div>
+          </div>
+        )}
+        
+        {pullDistance > 0 && (
+          <div className="absolute top-4 left-0 right-0 flex justify-center items-center h-12 z-50">
+            <RefreshCw className={`h-6 w-6 text-red-750 animate-spin`} style={{ opacity: pullDistance / 100 }} />
+          </div>
+        )}
+
+        <div 
+          className="max-w-2xl mx-auto p-4 space-y-3"
+          style={{ marginTop: `${pullDistance / 2}px`, transition: pullDistance === 0 ? 'margin-top 0.2s ease-out' : 'none' }}
+        >
             {history.length === 0 ? (
                 <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                   <ReceiptText className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />

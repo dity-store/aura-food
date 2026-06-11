@@ -53,9 +53,8 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     
     pdf.text('No.', labelX, y); pdf.text(`: ${tx.id}`, valueX, y); y += 4;
     pdf.text('Tgl.', labelX, y); pdf.text(`: ${new Date(tx.timestamp).toLocaleString('id-ID')}`, valueX, y); y += 4;
-    pdf.text('Cabang', labelX, y); pdf.text(`: ${activeBranch.toUpperCase()}`, valueX, y); y += 4;
     pdf.text('Kasir', labelX, y); pdf.text(`: REGULER`, valueX, y); y += 4;
-    pdf.text('Bayar', labelX, y); pdf.text(`: ${tx.paymentMethod.toUpperCase()}`, valueX, y); y += 5;
+    pdf.text('Metode', labelX, y); pdf.text(`: ${tx.paymentMethod.toUpperCase()}`, valueX, y); y += 5;
 
     // Separator
     pdf.text('------------------------------------------', centerX, y, { align: 'center' });

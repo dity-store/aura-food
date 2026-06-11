@@ -205,13 +205,16 @@ export async function syncMasterDataFromGAS(): Promise<void> {
   }
 }
 
-export async function getTransactionsFromGAS(idCabang: string): Promise<Transaction[]> {
+export async function getTransactionsFromGAS(idCabang: string, tanggal?: string): Promise<Transaction[]> {
     const config = getGASConfig();
     if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
     
     const url = new URL(config.webAppUrl);
     url.searchParams.append('action', 'get_all_transactions');
     url.searchParams.append('id_cabang', idCabang);
+    if (tanggal) {
+      url.searchParams.append('tanggal', tanggal);
+    }
     
     console.log("Fetching transactions from URL:", url.toString());
     
@@ -446,7 +449,7 @@ export async function saveTransaction(transaction: Transaction): Promise<void> {
   });
 }
 
-export async function clearSyncedTransactions(branchId?: string): Promise<void> {
+export async function clearSyncedTransactions(branchId?: string, dateStr?: string): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(['transactions'], 'readwrite');
@@ -458,8 +461,19 @@ export async function clearSyncedTransactions(branchId?: string): Promise<void> 
       if (cursor) {
         const txData = cursor.value as Transaction;
         if (txData.status === 'synced') {
-           if (!branchId || txData.cabang === branchId) {
-             cursor.delete();
+           let matchBranch = !branchId || String(txData.cabang) === String(branchId);
+           let matchDate = true;
+           if (dateStr) {
+               // Use local date formatting to safely match dateStr (which is YYYY-MM-DD from todayDate)
+               const d = new Date(txData.timestamp);
+               const y = d.getFullYear();
+               const m = String(d.getMonth() + 1).padStart(2, '0');
+               const day = String(d.getDate()).padStart(2, '0');
+               const dStr = `${y}-${m}-${day}`;
+               matchDate = dStr === dateStr;
+           }
+           if (matchBranch && matchDate) {
+              cursor.delete();
            }
         }
         cursor.continue();

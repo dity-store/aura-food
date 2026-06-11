@@ -57,15 +57,11 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
             <td className="text-right font-bold uppercase text-black">{finalBranchName}</td>
           </tr>
           <tr>
-            <td>Lokasi</td>
-            <td className="text-right text-black">{finalBranchLocation}</td>
-          </tr>
-          <tr>
             <td>Kasir</td>
             <td className="text-right uppercase text-black">Reguler</td>
           </tr>
           <tr>
-            <td>Bayar</td>
+            <td>Metode</td>
             <td className="text-right font-bold uppercase text-black">{transaction.paymentMethod}</td>
           </tr>
         </tbody>

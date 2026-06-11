@@ -206,7 +206,9 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         let txsRemote: Transaction[] = [];
         if (activeBranch) {
           try {
-            txsRemote = await getTransactionsFromGAS(activeBranch);
+            const [y, m, d] = selectedAdminDate.split('-');
+            const paramTanggal = `${d}/${m}/${y}`;
+            txsRemote = await getTransactionsFromGAS(activeBranch, paramTanggal);
           } catch (e) {
             console.error("Error loading remote transactions:", e);
           }
@@ -219,9 +221,22 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         
         setAllTransactions(unique);
 
-        const currentTransactions = currentBranch === 'Semua' 
-          ? unique 
-          : unique.filter(tx => String(tx.cabang) === String(currentBranch));
+        const currentDateStr = selectedAdminDate;
+        const currentTransactions = unique.filter(tx => {
+          if (currentBranch !== 'Semua' && String(tx.cabang) !== String(currentBranch)) {
+            return false;
+          }
+          try {
+            if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
+              return tx.timestamp.substring(0, 10) === currentDateStr;
+            }
+            const d = new Date(tx.timestamp);
+            const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            return dStr === currentDateStr;
+          } catch {
+            return false;
+          }
+        });
 
         const revenue = currentTransactions.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
         const transCount = currentTransactions.length;
@@ -394,9 +409,22 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   };
   
   // Local logic configurations
-  const transactions = currentBranchFilter === 'Semua'
-    ? allTransactions
-    : allTransactions.filter(tx => String(tx.cabang) === String(currentBranchFilter));
+  const currentDateStr = selectedAdminDate;
+  const transactions = allTransactions.filter(tx => {
+    if (currentBranchFilter !== 'Semua' && String(tx.cabang) !== String(currentBranchFilter)) {
+      return false;
+    }
+    try {
+      if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
+        return tx.timestamp.substring(0, 10) === currentDateStr;
+      }
+      const d = new Date(tx.timestamp);
+      const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return dStr === currentDateStr;
+    } catch {
+      return false;
+    }
+  });
 
   const queueCount = currentBranchFilter === 'Semua'
     ? allQueue.length

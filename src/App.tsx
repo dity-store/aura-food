@@ -460,7 +460,7 @@ export default function App() {
     try {
       // 1. Check ADMIN first
       if (cleanBranch === 'ADMIN') {
-        if (cleanPassword === 'yudiacantik123') {
+        if (cleanPassword === 'admin123') {
            localStorage.setItem('AURA_FOOD_BRANCH', cleanBranch);
            localStorage.setItem('AURA_FOOD_BRANCH_NAME', cleanBranch);
            setActiveBranch(cleanBranch);
@@ -951,10 +951,6 @@ export default function App() {
                         <div className="flex justify-between items-center text-xs">
                           <span className="text-zinc-500 font-medium whitespace-nowrap">Tanggal & Waktu</span>
                           <span className="text-zinc-900 font-bold text-right">{new Date(selectedTx.timestamp).toLocaleString('id-ID')}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-zinc-500 font-medium whitespace-nowrap">Cabang</span>
-                          <span className="text-zinc-900 font-bold text-right">{cabangList.find(c => String(c.ID_CABANG) === selectedTx.cabang)?.NAMA_CABANG || selectedTx.cabang}</span>
                         </div>
                         <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
                           <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>

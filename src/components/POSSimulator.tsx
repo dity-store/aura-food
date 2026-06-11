@@ -67,6 +67,8 @@ interface POSSimulatorProps {
   initialCreateMode?: boolean;
 }
 
+let posInitialFetchDone = new Set<string>();
+
 export default function POSSimulator({ 
   onSelectTransaction, 
   selectedTransaction, 
@@ -256,6 +258,8 @@ export default function POSSimulator({
     setStartY(null);
   };
 
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
+
   useEffect(() => {
     if (onCreatingStatusChange) {
       // Sync strictly based on whether we are creating tx
@@ -265,6 +269,7 @@ export default function POSSimulator({
 
   const loadDataFromDB = async (forceRemote: boolean = false) => {
     try {
+      if (forceRemote) setIsInitialLoading(true);
       const dbMaster = await seedMasterDataIfEmpty();
       setMasterData(dbMaster);
 
@@ -272,17 +277,20 @@ export default function POSSimulator({
       
       if (navigator.onLine && activeBranch && activeBranch !== 'ADMIN' && forceRemote) {
         try {
-            const remoteHistory = await getTransactionsFromGAS(activeBranch);
+            const dateObj = new Date();
+            const yearStr = dateObj.getFullYear();
+            const monthStr = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const dayStr = String(dateObj.getDate()).padStart(2, '0');
+            const paramTanggal = `${dayStr}/${monthStr}/${yearStr}`;
+            const isoTanggal = `${yearStr}-${monthStr}-${dayStr}`;
+            // we only fetch latest remote history of this branch up to today for speed
+            const remoteHistory = await getTransactionsFromGAS(activeBranch, paramTanggal);
             console.log("Remote transactions fetched:", remoteHistory);
             
-            // Delete old data for this branch and update with new
-            if (remoteHistory.length === 0) {
-                 await clearSyncedTransactions(activeBranch); // Delete only synced
-            } else {
-                 await clearSyncedTransactions(activeBranch); // Refresh fully for this branch
-                 for (const tx of remoteHistory) {
-                     await saveTransaction(tx);
-                 }
+            // Delete today's synced data for this branch and update with new
+            await clearSyncedTransactions(activeBranch, isoTanggal);
+            for (const tx of remoteHistory) {
+                await saveTransaction(tx);
             }
             // Refetch all to get updated list
             allHistory = await getTransactions();
@@ -291,19 +299,25 @@ export default function POSSimulator({
         }
       }
       
-      const branchHistory = activeBranch === 'ADMIN' ? allHistory : allHistory.filter(tx => tx.cabang === activeBranch);
+      const branchHistory = activeBranch === 'ADMIN' ? allHistory : allHistory.filter(tx => String(tx.cabang) === String(activeBranch));
       setHistory(branchHistory.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
 
       const dbQueue = await getSyncQueue();
-      const branchQueue = activeBranch === 'ADMIN' ? dbQueue : dbQueue.filter(item => item.payload?.cabang === activeBranch);
+      const branchQueue = activeBranch === 'ADMIN' ? dbQueue : dbQueue.filter(item => String(item.payload?.cabang) === String(activeBranch));
       setPendingQueue(branchQueue);
+      setIsInitialLoading(false);
     } catch (err) {
       console.error("IndexedDB error:", err);
+      setIsInitialLoading(false);
     }
   };
 
   useEffect(() => {
-    loadDataFromDB();
+    const shouldFetchRemote = !!activeBranch && activeBranch !== 'ADMIN' && !posInitialFetchDone.has(activeBranch);
+    if (shouldFetchRemote) {
+        posInitialFetchDone.add(activeBranch);
+    }
+    loadDataFromDB(shouldFetchRemote);
     const handleOnline = () => {
       setIsOnline(true);
       processSyncQueue().then(() => loadDataFromDB());
@@ -1333,21 +1347,33 @@ export default function POSSimulator({
   }
 
   if (!isCreatingTx) {
-    const todayStr = new Date().toLocaleDateString('en-CA');
+    const todayDate = new Date();
+    const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
     const displayDateStr = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     const todayTxs = history.filter(tx => {
-      return tx.timestamp.startsWith(todayStr) || new Date(tx.timestamp).toLocaleDateString('en-CA') === todayStr;
+      const d = new Date(tx.timestamp);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const dStr = `${y}-${m}-${day}`;
+      return dStr === todayStr;
     });
     const todayRevenue = todayTxs.reduce((sum, tx) => sum + tx.totalAmount, 0);
 
     return (
       <>
         <div 
-          className="space-y-6 animate-fade-in text-left"
+          className="space-y-6 animate-fade-in text-left relative"
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
+          {isInitialLoading && (
+            <div className="absolute inset-0 z-50 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center rounded-[24px]">
+              <RefreshCw className="h-8 w-8 text-red-750 animate-spin mb-3" />
+              <p className="text-sm font-bold text-red-900 animate-pulse">Menyinkronkan Data...</p>
+            </div>
+          )}
           {pullDistance > 0 && (
             <div className="fixed top-20 left-0 right-0 flex justify-center items-center h-12">
               <RefreshCw className={`h-6 w-6 text-red-700 animate-spin`} style={{ opacity: pullDistance / 100 }} />
