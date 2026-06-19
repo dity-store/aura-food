@@ -86,6 +86,7 @@ interface Props { children: ReactNode; }
 interface State { hasError: boolean; error: Error | null; }
 
 class ErrorBoundary extends Component<Props, State> {
+  props: Props;
   public state: State = { hasError: false, error: null };
   constructor(props: Props) {
     super(props);

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Transaction } from '../types';
 import { getFormattedMenuDisplay } from '../utils/formatter';
 import { Printer, Copy, Check, FileCode, AlertCircle, Share2, PrinterIcon } from 'lucide-react';
@@ -14,8 +14,25 @@ interface ReceiptProps {
 export default function ReceiptThermal({ transaction, hideSimulatorFrame, branchName, branchLocation }: ReceiptProps) {
   const receiptRef = useRef<HTMLDivElement>(null);
   const [printStatus, setPrintStatus] = useState<'idle' | 'generating' | 'success'>('idle');
+  const [dbBranchName, setDbBranchName] = useState<string>('');
+  const [dbBranchLocation, setDbBranchLocation] = useState<string>('');
 
-  const total = transaction.totalAmount;
+  useEffect(() => {
+    let active = true;
+    import('../utils/db').then(({ getMasterData }) => {
+      getMasterData().then(data => {
+        if (!active) return;
+        const b = data?.cabang?.find((c: any) => String(c.ID_CABANG) === String(transaction.cabang));
+        if (b) {
+          setDbBranchName(b.NAMA_CABANG);
+          setDbBranchLocation(b.LOKASI || '');
+        }
+      }).catch(err => console.error("Error loading master data in ReceiptThermal", err));
+    });
+    return () => { active = false; };
+  }, [transaction.cabang]);
+
+  const total = Number(transaction.totalAmount || 0);
 
   const handleSimulatePrint = () => {
     setPrintStatus('generating');
@@ -25,8 +42,8 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
     }, 1200);
   };
   
-  const finalBranchName = branchName || transaction.cabang || 'MATARAM';
-  const finalBranchLocation = branchLocation || 'Jl. R Suprapto, Taman Sari, Mataram';
+  const finalBranchName = branchName || dbBranchName || transaction.cabang || 'MATARAM';
+  const finalBranchLocation = branchLocation || dbBranchLocation || 'Jl. R Suprapto, Taman Sari, Mataram';
 
   const content = (
     <div 
@@ -57,12 +74,10 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
             <td className="text-right font-bold uppercase text-black">{finalBranchName}</td>
           </tr>
           <tr>
-            <td>Kasir</td>
-            <td className="text-right uppercase text-black">Reguler</td>
-          </tr>
-          <tr>
             <td>Metode</td>
-            <td className="text-right font-bold uppercase text-black">{transaction.paymentMethod}</td>
+            <td className="text-right font-bold uppercase text-black">
+              {transaction.pesanan?.JENIS_PESANAN === 'Compliment' ? '-' : transaction.paymentMethod}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -78,19 +93,46 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
       <p className="my-1 border-t border-dashed border-black"></p>
 
       <div className="space-y-2 mt-2 mb-3 text-black">
-        {transaction.detail.map((item, index) => (
+        {transaction.detail.filter(item => !(item.VARIAN === 'Diskon/Promo' || item.HARGA_SATUAN < 0 || item.NAMA_MENU.includes('[PROMO]'))).map((item, index) => (
           <div key={index} className="grid grid-cols-12 leading-tight">
             <span className="col-span-6 font-bold leading-tight pr-1 line-clamp-2">{getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN)}</span>
             <span className="col-span-2 text-right">{item.QTY}</span>
             <span className="col-span-4 text-right font-bold">
-              Rp{item.SUBTOTAL.toLocaleString('id-ID')}
+              Rp{Number(item.SUBTOTAL || 0).toLocaleString('id-ID')}
             </span>
             <span className="col-span-12 text-[9px] text-black mt-0.5">
-              @ Rp{item.HARGA_SATUAN.toLocaleString('id-ID')}
+              @ Rp{Number(item.HARGA_SATUAN || 0).toLocaleString('id-ID')}
             </span>
           </div>
         ))}
       </div>
+
+      {(() => {
+        const promoItems = transaction.detail.filter(item => (item.VARIAN === 'Diskon/Promo' || item.HARGA_SATUAN < 0 || item.NAMA_MENU.includes('[PROMO]')));
+        const totalDiskon = promoItems.reduce((acc, item) => acc + Math.abs(item.SUBTOTAL), 0);
+        const hasNotes = !!transaction.pesanan?.CATATAN;
+        const hasPromoOrNotes = totalDiskon > 0 || hasNotes;
+
+        if (!hasPromoOrNotes) return null;
+
+        return (
+          <>
+            <p className="my-2 border-t border-dashed border-black"></p>
+            {totalDiskon > 0 && (
+              <div className="flex justify-between items-center py-0.5 text-[10px] text-black mb-1.5">
+                <span className="font-bold uppercase tracking-widest text-black">Diskon/Potongan</span>
+                <span className="font-bold text-black">-Rp{totalDiskon.toLocaleString('id-ID')}</span>
+              </div>
+            )}
+            {hasNotes && (
+              <div className="text-left py-1 text-black text-[10px] leading-relaxed break-words px-1 mb-1.5">
+                <span className="font-bold">Catatan:</span>
+                <p className="mt-1 normal-case text-zinc-850">{transaction.pesanan?.CATATAN}</p>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       <p className="my-2 border-t-2 border-dashed border-black"></p>
 

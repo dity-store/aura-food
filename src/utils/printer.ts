@@ -2,6 +2,7 @@
 import ReceiptPrinterEncoder from 'thermal-printer-encoder';
 import { Transaction } from '../types';
 import { getFormattedMenuDisplay } from './formatter';
+import { getMasterData } from './db';
 
 export const connectThermalPrinter = (): Promise<any> => {
   return new Promise(async (resolve, reject) => {
@@ -134,6 +135,10 @@ export const connectThermalPrinter = (): Promise<any> => {
 };
 
 export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Transaction, cabangName: string) => {
+  const masterData = await getMasterData().catch(() => null);
+  const branchObj = masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(tx.cabang));
+  const finalBranchLocation = branchObj?.LOKASI || 'Jl. R Suprapto, Taman Sari, Mataram';
+
   // Use thermal-printer-encoder to generate exactly matching bytes as the PDF
   const encoder = new ReceiptPrinterEncoder({
       language: 'esc-pos'
@@ -150,7 +155,7 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .text('AURA FOOD')
     .bold(false)
     .newline()
-    .text('Jl. R Suprapto, Taman Sari, Mataram')
+    .text(finalBranchLocation)
     .newline()
     .text('Telp: 0821 4752 1751')
     .newline()
@@ -162,12 +167,17 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .text(`No.   : ${tx.id}`)
     .newline()
     .text(`Tgl.  : ${new Date(tx.timestamp).toLocaleString('id-ID')}`)
-    .newline()
-    .text(`Kasir : REGULER`)
-    .newline()
-    .text(`Metode: ${tx.paymentMethod.toUpperCase()}`)
-    .newline()
-    .align('center')
+    .newline();
+
+  if (tx.pesanan?.JENIS_PESANAN === 'Compliment') {
+    receipt.text('Status: COMPLIMENT')
+      .newline();
+  }
+
+  receipt.text(`Metode: ${tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'GRATIS' : tx.paymentMethod.toUpperCase()}`)
+    .newline();
+
+  receipt.align('center')
     .text(line)
     .newline()
     // Manual text aligning for headers
@@ -207,8 +217,20 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .text(`                    Rp${tx.totalAmount.toLocaleString('id-ID')}`.slice(-24))
     .bold(false)
     .newline()
-    .newline()
-    .align('center')
+    .newline();
+
+  if (tx.pesanan?.CATATAN) {
+    receipt.align('left')
+      .bold(true)
+      .text('Catatan:')
+      .bold(false)
+      .newline()
+      .text(tx.pesanan.CATATAN)
+      .newline()
+      .newline();
+  }
+
+  receipt.align('center')
     .bold(true)
     .text('TERIMA KASIH')
     .bold(false)

@@ -1,7 +1,7 @@
 import { Transaction, SyncQueueItem, Cabang, Kategori, Menu, Varian, MasterData, GASConfig } from '../types';
 
 const DB_NAME = 'Sistem Keuangan Aura Food'; // Update db name to start fresh
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export function initDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -18,6 +18,7 @@ export function initDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('kategori')) db.createObjectStore('kategori', { keyPath: 'ID_KATEGORI' });
       if (!db.objectStoreNames.contains('menu')) db.createObjectStore('menu', { keyPath: 'ID_MENU' });
       if (!db.objectStoreNames.contains('varian')) db.createObjectStore('varian', { keyPath: 'ID_VARIAN' });
+      if (!db.objectStoreNames.contains('promo')) db.createObjectStore('promo', { keyPath: 'ID_PROMO' });
 
       // Transactions & sync
       if (!db.objectStoreNames.contains('transactions')) db.createObjectStore('transactions', { keyPath: 'id' });
@@ -31,15 +32,16 @@ export function initDB(): Promise<IDBDatabase> {
 export async function saveMasterData(data: MasterData): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian'], 'readwrite');
+    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo'], 'readwrite');
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
 
-    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian'];
+    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo'];
     for (const name of storeNames) {
+      if (!data[name]) continue;
       const store = tx.objectStore(name as string);
       store.clear();
-      data[name].forEach((item: any) => store.put(item));
+      data[name]?.forEach((item: any) => store.put(item));
     }
   });
 }
@@ -47,11 +49,11 @@ export async function saveMasterData(data: MasterData): Promise<void> {
 export async function getMasterData(): Promise<MasterData> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian'], 'readonly');
-    const data: MasterData = { cabang: [], kategori: [], menu: [], varian: [] };
+    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo'], 'readonly');
+    const data: MasterData = { cabang: [], kategori: [], menu: [], varian: [], promo: [] };
     let completed = 0;
 
-    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian'];
+    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo'];
     for (const name of storeNames) {
       const req = tx.objectStore(name as string).getAll();
       req.onsuccess = () => {
@@ -85,7 +87,8 @@ export async function seedMasterDataIfEmpty(): Promise<MasterData> {
     cabang: [],
     kategori: [],
     menu: [],
-    varian: []
+    varian: [],
+    promo: []
   };
 
   await saveMasterData(defaultData);
@@ -133,12 +136,13 @@ export async function syncMasterDataFromGAS(): Promise<void> {
     if (resFull.ok) {
       const fullResult = await resFull.json();
       const data = fullResult.data || fullResult;
-      if (data && (data.cabang || data.kategori || data.menu || data.varian)) {
+      if (data && (data.cabang || data.kategori || data.menu || data.varian || data.promo)) {
         const dbData: MasterData = {
           cabang: data.cabang || [],
           kategori: data.kategori || [],
           menu: data.menu || [],
-          varian: data.varian || []
+          varian: data.varian || [],
+          promo: data.promo || []
         };
         await saveMasterData(dbData);
         console.log("Master data lengkap berhasil disinkronisasi.");
@@ -232,7 +236,9 @@ export async function getTransactionsFromGAS(idCabang: string, tanggal?: string)
         TANGGAL_WAKTU: item.TANGGAL_WAKTU,
         ID_CABANG: item.ID_CABANG,
         TOTAL_TAGIHAN: item.TOTAL_TAGIHAN,
-        METODE_BAYAR: item.METODE_BAYAR
+        METODE_BAYAR: item.METODE_BAYAR,
+        JENIS_PESANAN: item.JENIS_PESANAN || '',
+        CATATAN: item.CATATAN || ''
       },
       detail: item.detail || [], // Use detail from response
       status: 'synced',
@@ -303,13 +309,20 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
     return true;
   });
 
-  const totalRevenue = validPesanan.reduce((sum, p) => sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0), 0);
+  const totalRevenue = validPesanan.reduce((sum, p) => {
+    const isCompliment = String(p.JENIS_PESANAN || p[5] || '').toUpperCase() === 'COMPLIMENT';
+    if (isCompliment) return sum;
+    return sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
+  }, 0);
   const totalTransactions = validPesanan.length;
   
   let totalCash = 0;
   let totalTransfer = 0;
   
   validPesanan.forEach(p => {
+    const isCompliment = String(p.JENIS_PESANAN || p[5] || '').toUpperCase() === 'COMPLIMENT';
+    if (isCompliment) return;
+    
     const method = String(p.METODE_BAYAR || p[4] || '').toUpperCase();
     const amount = Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
     if (method === 'CASH' || method === 'TUNAI') {
@@ -340,7 +353,11 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
         if (getLocalDateString(pDate) !== yesterdayDateStr) return false;
         return true;
       });
-      yesterdayRevenue = yesterdayPesanan.reduce((sum, p) => sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0), 0);
+      yesterdayRevenue = yesterdayPesanan.reduce((sum, p) => {
+        const isCompliment = String(p.JENIS_PESANAN || p[5] || '').toUpperCase() === 'COMPLIMENT';
+        if (isCompliment) return sum;
+        return sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
+      }, 0);
     } catch (e) {
       console.error("Error calculating yesterday revenue:", e);
     }
@@ -370,7 +387,9 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
       TANGGAL_WAKTU: p.TANGGAL_WAKTU || p[1],
       ID_CABANG: p.ID_CABANG || p[2],
       TOTAL_TAGIHAN: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
-      METODE_BAYAR: p.METODE_BAYAR || p[4]
+      METODE_BAYAR: p.METODE_BAYAR || p[4],
+      JENIS_PESANAN: p.JENIS_PESANAN || p[5] || '',
+      CATATAN: p.CATATAN || p[6] || ''
     },
     detail: details.filter(d => String(d.ID_PESANAN || d[1] || d[0]) === String(p.ID_PESANAN || p[0])),
     status: 'synced' as 'synced',
@@ -422,19 +441,24 @@ export async function getAdminReportsData(
   url.searchParams.append('semester', semester);
   url.searchParams.append('_timestamp', Date.now().toString());
 
-  const res = await fetch(url.toString(), { redirect: 'follow' });
-  if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-  
-  const result = await res.json();
-  if (result.status !== 'success') throw new Error(result.message || 'Gagal mengambil data laporan.');
-  
-  const fetchedData = result.data || {};
-  return {
-    pemasukan: Number(fetchedData.pemasukan || 0),
-    pengeluaran: Number(fetchedData.pengeluaran || 0),
-    saldoBersih: Number(fetchedData.saldoBersih || 0),
-    transaksi: fetchedData.transaksi || []
-  };
+  try {
+    const res = await fetch(url.toString(), { redirect: 'follow' });
+    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+    
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error(result.message || 'Gagal mengambil data laporan.');
+    
+    const fetchedData = result.data || {};
+    return {
+      pemasukan: Number(fetchedData.pemasukan || 0),
+      pengeluaran: Number(fetchedData.pengeluaran || 0),
+      saldoBersih: Number(fetchedData.saldoBersih || 0),
+      transaksi: fetchedData.transaksi || []
+    };
+  } catch (err: any) {
+    console.error("Fetch error in getAdminReportsData:", err);
+    throw new Error("Gagal terhubung ke Sistem Pusat (Google Apps Script). Pastikan koneksi internet stabil dan URL Apps Script di pengaturan benar.");
+  }
 }
 
 export async function saveTransaction(transaction: Transaction): Promise<void> {
@@ -707,6 +731,29 @@ export async function fetchUniversalDataFromGAS(sheetName: string): Promise<any[
   } catch(e: any) {
     console.warn(`Sinkronisasi modul ${sheetName} tertunda: Koneksi gagal atau offline.`);
     return [];
+  }
+}
+
+export function getPrintedTransactionIds(): string[] {
+  try {
+    const val = localStorage.getItem('printed_transactions_kv');
+    return val ? JSON.parse(val) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markTransactionAsPrinted(id: string): void {
+  try {
+    const ids = getPrintedTransactionIds();
+    if (!ids.includes(id)) {
+      ids.push(id);
+      localStorage.setItem('printed_transactions_kv', JSON.stringify(ids));
+      // Dispatch a storage event so other tabs/components hear it
+      window.dispatchEvent(new Event('printed-transactions-updated'));
+    }
+  } catch (e) {
+    console.error(e);
   }
 }
 

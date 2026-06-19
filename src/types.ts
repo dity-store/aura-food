@@ -52,6 +52,7 @@ export interface MasterData {
   kategori: Kategori[];
   menu: Menu[];
   varian: Varian[];
+  promo?: Promo[];
   katalogLengkap?: NestedKategori[];
 }
 
@@ -61,6 +62,8 @@ export interface Pesanan {
   ID_CABANG: string;
   TOTAL_TAGIHAN: number;
   METODE_BAYAR: string;
+  JENIS_PESANAN?: string;
+  CATATAN?: string;
 }
 
 export interface DetailPesanan {
@@ -71,6 +74,15 @@ export interface DetailPesanan {
   HARGA_SATUAN: number;
   QTY: number;
   SUBTOTAL: number;
+}
+
+export interface Promo {
+  ID_PROMO: string;
+  NAMA_PROMO: string;
+  TIPE: string;
+  TARGET_ITEM: string;
+  SYARAT_QTY: number;
+  NILAI_PROMO: number;
 }
 
 export interface CartItem {

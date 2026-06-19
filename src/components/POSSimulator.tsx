@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import confetti from 'canvas-confetti';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { MasterData, Varian, Menu, CartItem, Transaction, SyncQueueItem } from '../types';
@@ -15,7 +16,9 @@ import {
   processSyncQueue,
   getGASConfig,
   getTransactionsFromGAS,
-  clearSyncedTransactions
+  clearSyncedTransactions,
+  markTransactionAsPrinted,
+  getPrintedTransactionIds
 } from '../utils/db';
 import { printReceipt, generateAndUploadReceipt } from '../utils/pdf';
 import { connectThermalPrinter, printThermalReceipt } from '../utils/printer';
@@ -52,7 +55,13 @@ import {
   Calendar,
   Package,
   Folder,
-  CheckCircle2
+  CheckCircle2,
+  XCircle,
+  Gift,
+  QrCode,
+  ShoppingBag,
+  Coins,
+  ChevronDown
 } from 'lucide-react';
 
 interface POSSimulatorProps {
@@ -125,9 +134,18 @@ export default function POSSimulator({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [confirmDiscardCart, setConfirmDiscardCart] = useState<boolean>(false);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [alertType, setAlertType] = useState<'success' | 'error' | 'warning'>('warning');
+
+  const triggerAlert = (msg: string, type: 'success' | 'error' | 'warning' = 'warning') => {
+    setAlertType(type);
+    setAlertMessage(msg);
+  };
 
   // Default payment
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'E-Wallet' | 'Debit Card'>('Cash');
+  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Transfer' | 'QRIS'>('Cash');
+  const [isCompliment, setIsCompliment] = useState<boolean>(false);
+  const [catatan, setCatatan] = useState<string>('');
+  
   const [autoPrint, setAutoPrint] = useState(true);
   const [selectedMenuForVarian, setSelectedMenuForVarian] = useState<Menu | null>(null);
   const [selectedTransactionForKasir, setSelectedTransactionForKasir] = useState<Transaction | null>(null);
@@ -141,6 +159,13 @@ export default function POSSimulator({
   const [isReporting, setIsReporting] = useState<boolean>(false);
   const [reportData, setReportData] = useState<{folder_url: string, kontak_wa: string, nama_cabang: string} | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [selectedReportDate, setSelectedReportDate] = useState<string>(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  });
   const [pullDistance, setPullDistance] = useState(0);
   const [thermalPrinter, setThermalPrinter] = useState<any>(null); // BluetoothDevice
   const [showPrinterSettings, setShowPrinterSettings] = useState<boolean>(false);
@@ -221,7 +246,7 @@ export default function POSSimulator({
       const device = await connectThermalPrinter();
       if (device) {
         setThermalPrinter(device);
-        setAlertMessage(`Printer thermal (${device.name}) berhasil terhubung via Web Bluetooth.`);
+        triggerAlert(`Printer thermal (${device.name}) berhasil terhubung via Web Bluetooth.`, 'success');
         setShowPrinterSettings(false);
       }
     } catch (err) {
@@ -265,7 +290,10 @@ export default function POSSimulator({
       // Sync strictly based on whether we are creating tx
       onCreatingStatusChange(isCreatingTx);
     }
-  }, [isCreatingTx, onCreatingStatusChange]);
+    if (isCreatingTx) {
+      onSelectTransaction(null);
+    }
+  }, [isCreatingTx, onCreatingStatusChange, onSelectTransaction]);
 
   const loadDataFromDB = async (forceRemote: boolean = false) => {
     try {
@@ -419,7 +447,7 @@ export default function POSSimulator({
 
   const addToCart = (item: { varian: Varian, menu: Menu }) => {
     if (activeBranch === 'ADMIN') {
-      setAlertMessage("Cabang ADMIN bertindak hanya sebagai pemantau dan tidak dapat menambahkan pesanan baru.");
+      triggerAlert("Cabang ADMIN bertindak hanya sebagai pemantau dan tidak dapat menambahkan pesanan baru.", "error");
       return;
     }
 
@@ -459,10 +487,80 @@ export default function POSSimulator({
     setCart(prev => prev.filter(item => item.varian.ID_VARIAN !== idVarian));
   };
 
-  const checkoutTotal = cart.reduce((sum, item) => sum + (item.varian.HARGA * item.quantity), 0);
+  const getEffectiveCart = () => {
+    let effective = [...cart];
+    if (masterData?.promo) {
+       masterData.promo.forEach(p => {
+          const targets = p.TARGET_ITEM ? String(p.TARGET_ITEM).split('|').map(s => s.trim()) : [];
+          if (targets.length === 0) return;
+          
+          let matchingQty = 0;
+          let matchingTotalValue = 0;
+          for (let item of cart) {
+             if (targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU))) {
+                matchingQty += item.quantity;
+                matchingTotalValue += (item.varian.HARGA * item.quantity);
+             }
+          }
+
+          if (matchingQty >= p.SYARAT_QTY && p.SYARAT_QTY > 0) {
+             const timesApplied = Math.floor(matchingQty / p.SYARAT_QTY);
+             let discountAmount = 0;
+             let discountName = `[PROMO] ${p.NAMA_PROMO}`;
+             
+             if (p.TIPE === 'HARGA_FIX') {
+                let targetNormalPriceForSyarat = 0;
+                let qToCount = p.SYARAT_QTY * timesApplied;
+                
+                for (let item of cart) {
+                  if (targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU))) {
+                     let takeQty = Math.min(item.quantity, qToCount);
+                     targetNormalPriceForSyarat += takeQty * item.varian.HARGA;
+                     qToCount -= takeQty;
+                     if (qToCount <= 0) break;
+                  }
+                }
+                
+                const promoFixedPrice = Number(p.NILAI_PROMO) * timesApplied;
+                discountAmount = targetNormalPriceForSyarat - promoFixedPrice;
+             } else if (p.TIPE === 'DISKON_PERSEN') {
+                discountAmount = matchingTotalValue * (Number(p.NILAI_PROMO) / 100);
+             }
+
+             if (discountAmount > 0) {
+                effective.push({
+                   id_detail: `promo-${p.ID_PROMO}-${Date.now()}`,
+                   menu: {
+                      ID_MENU: 'PROMO',
+                      NAMA_MENU: discountName,
+                      ID_KATEGORI: 'PROMO',
+                      FOTO: '',
+                      TERSEDIA: true
+                   },
+                   varian: {
+                      ID_VARIAN: `var-${p.ID_PROMO}`,
+                      ID_MENU: 'PROMO',
+                      NAMA_VARIAN: 'Diskon/Promo',
+                      HARGA: -discountAmount,
+                      KETERANGAN: ''
+                   },
+                   quantity: 1
+                });
+             }
+          }
+       });
+    }
+    return effective;
+  };
+
+  const effectiveCart = getEffectiveCart();
+  const checkoutTotal = effectiveCart.reduce((sum, item) => sum + (item.varian.HARGA * item.quantity), 0);
 
   const printReceiptAndUpload = async (tx: Transaction) => {
     onPrintingStatus?.('printing');
+    
+    // Mark as printed
+    markTransactionAsPrinted(tx.id);
     
     setSelectedTransactionForKasir(null);
     
@@ -501,22 +599,53 @@ export default function POSSimulator({
     }
   };
 
-  const handleSendWaReport = (todayRevenue: number, todayTxsLength: number) => {
+  const handleSendWaReport = (totalRevenue: number, totalCash: number, totalTransfer: number, todayTxs: Transaction[], isToday: boolean, displayDateStr: string) => {
     if (!reportData || !reportData.kontak_wa) return;
-    
-    const dNow = new Date();
-    const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
-    const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-    const tanggal = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
     
     let kontak = reportData.kontak_wa.toString().replace(/\D/g, '');
     if (kontak.startsWith('0')) kontak = '62' + kontak.substring(1);
     
-    const text = `Halo, berikut adalah *Laporan Omset Hari Ini*:\n\n` +
+    let menuSales: { [menuName: string]: { total: number, variants: { [variantName: string]: number } } } = {};
+    todayTxs.forEach(tx => {
+      tx.detail?.forEach(item => {
+        const menu = item.NAMA_MENU || 'Unknown';
+        const variant = item.VARIAN || 'Unknown';
+        const qty = Number(item.QTY) || 1;
+        
+        if (!menuSales[menu]) {
+          menuSales[menu] = { total: 0, variants: {} };
+        }
+        menuSales[menu].total += qty;
+        
+        if (!menuSales[menu].variants[variant]) {
+          menuSales[menu].variants[variant] = 0;
+        }
+        menuSales[menu].variants[variant] += qty;
+      });
+    });
+
+    let rincianMenuText = "\n*Rincian Menu Terjual:*\n";
+    const sortedMenus = Object.entries(menuSales).sort((a, b) => b[1].total - a[1].total);
+    if (sortedMenus.length === 0) {
+      rincianMenuText += "Tidak ada menu terjual\n";
+    } else {
+      sortedMenus.forEach(([menu, data], idx) => {
+        rincianMenuText += `${idx + 1}. ${menu}: ${data.total}x dipesan\n`;
+        const sortedVariants = Object.entries(data.variants).sort(([_vA, qA], [_vB, qB]) => qB - qA);
+        sortedVariants.forEach(([variant, qty]) => {
+          rincianMenuText += `    - ${variant}: ${qty}x dipesan\n`;
+        });
+      });
+    }
+
+    const text = `Halo, berikut adalah *Laporan Omset ${isToday ? 'Hari Ini' : 'Harian'}*:\n\n` +
       `*Cabang:* ${reportData.nama_cabang}\n` +
-      `*Tanggal:* ${hari}, ${tanggal}\n` +
-      `*Total Omset:* Rp${todayRevenue.toLocaleString('id-ID')}\n` +
-      `*Total Pesanan:* ${todayTxsLength} Selesai\n\n` +
+      `*Tanggal:* ${displayDateStr}\n` +
+      `*Total Omset:* Rp${totalRevenue.toLocaleString('id-ID')}\n` +
+      `*Total Cash:* Rp${totalCash.toLocaleString('id-ID')}\n` +
+      `*Total Transfer:* Rp${totalTransfer.toLocaleString('id-ID')}\n` +
+      `*Total Pesanan:* ${todayTxs.length} Selesai\n` +
+      rincianMenuText + `\n` +
       `*Folder Struk:* \n${reportData.folder_url}\n\n` +
       `Terima kasih!`;
       
@@ -537,9 +666,11 @@ export default function POSSimulator({
         TANGGAL_WAKTU: now.toISOString(),
         ID_CABANG: activeBranch,
         TOTAL_TAGIHAN: checkoutTotal,
-        METODE_BAYAR: paymentMethod
+        METODE_BAYAR: isCompliment ? 'Compliment' : paymentMethod,
+        JENIS_PESANAN: isCompliment ? 'Compliment' : 'Normal',
+        CATATAN: catatan
       },
-      detail: cart.map(c => ({
+      detail: effectiveCart.map(c => ({
         ID_DETAIL: c.id_detail,
         ID_PESANAN: transactionId,
         NAMA_MENU: c.menu.NAMA_MENU,
@@ -551,7 +682,7 @@ export default function POSSimulator({
       timestamp: now.toISOString(),
       cabang: activeBranch,
       totalAmount: checkoutTotal,
-      paymentMethod,
+      paymentMethod: isCompliment ? 'Compliment' : paymentMethod,
       status: 'pending_sync'
     };
 
@@ -560,6 +691,7 @@ export default function POSSimulator({
       
       if (thermalPrinter) {
         await printThermalReceipt(thermalPrinter, newTx, derivedBranchName);
+        markTransactionAsPrinted(newTx.id);
       }
       
       await addToSyncQueue({
@@ -574,24 +706,34 @@ export default function POSSimulator({
         processSyncQueue().then(() => loadDataFromDB());
       }
 
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#ef4444', '#f87171', '#fca5a5', '#fee2e2']
+      });
+
       setCart([]);
+      setIsCompliment(false);
+      setCatatan('');
       setShowCheckoutModal(false);
       setIsCreatingTx(false);
       
       await loadDataFromDB();
-      onSelectTransaction(newTx);
+      onSelectTransaction(null); // Prevent global preview from popping up below
       
       setTimeout(() => {
+         document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
          if (autoPrint) {
             printReceiptAndUpload(newTx);
          } else {
             generateAndUploadReceipt(newTx, activeBranch);
          }
-      }, 500);
+      }, 700);
 
     } catch (err) {
       console.error("Gagal memproses checkout", err);
-      setAlertMessage("Terjadi kesalahan saat menyimpan transaksi (IndexedDB).");
+      triggerAlert("Terjadi kesalahan saat menyimpan transaksi (IndexedDB).", "error");
     }
   };
 
@@ -828,8 +970,8 @@ export default function POSSimulator({
                     </p>
                   </div>
                 ) : (
-                  cart.map((item) => (
-                    <div key={item.varian.ID_VARIAN} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm text-left gap-4">
+                  effectiveCart.map((item) => (
+                    <div key={item.id_detail} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm text-left gap-4">
                       <div className="flex-1 min-w-0">
                         <h4 className="text-sm font-bold text-zinc-950 truncate leading-tight mb-1" title={getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}>{getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}</h4>
                         <p className="text-[11px] text-zinc-500 font-medium">
@@ -841,25 +983,27 @@ export default function POSSimulator({
                         <span className="text-xs font-black text-zinc-950">
                           Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}
                         </span>
-                        <div className="flex items-center bg-zinc-50 border border-zinc-200 rounded-xl overflow-hidden h-8 shadow-sm">
-                          <button
-                            type="button"
-                            onClick={() => updateCartQty(item.varian.ID_VARIAN, -1)}
-                            className="px-3 hover:bg-zinc-200 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </button>
-                          <span className="px-2 font-mono text-sm font-extrabold text-zinc-900 min-w-[28px] text-center">
-                            {item.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => updateCartQty(item.varian.ID_VARIAN, 1)}
-                            className="px-3 hover:bg-zinc-200 hover:text-red-700 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
+                        {item.menu.ID_MENU === 'PROMO' ? null : (
+                          <div className="flex items-center bg-zinc-50 border border-zinc-200 rounded-xl overflow-hidden h-8 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => updateCartQty(item.varian.ID_VARIAN, -1)}
+                              className="px-3 hover:bg-zinc-200 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
+                            >
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                            <span className="px-2 font-mono text-sm font-extrabold text-zinc-900 min-w-[28px] text-center">
+                              {item.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => updateCartQty(item.varian.ID_VARIAN, 1)}
+                              className="px-3 hover:bg-zinc-200 hover:text-red-700 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))
@@ -966,9 +1110,9 @@ export default function POSSimulator({
                   <label className="text-[10px] font-black text-zinc-500 block mb-3 uppercase tracking-wider">
                     Cek Ulang Pesanan
                   </label>
-                  <div className="space-y-3 mb-4 max-h-[160px] overflow-y-auto pr-1">
-                    {cart.map(item => (
-                      <div key={item.varian.ID_VARIAN} className="flex justify-between text-xs items-center">
+                  <div className="space-y-3 mb-4 max-h-[115px] overflow-y-auto pr-2 custom-scrollbar">
+                    {effectiveCart.map(item => (
+                      <div key={item.id_detail} className="flex justify-between text-xs items-center">
                         <span className="text-zinc-800 font-semibold leading-tight pr-4">
                           <span className="font-extrabold text-zinc-950 inline-block w-6">{item.quantity}x</span> 
                           {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
@@ -985,76 +1129,101 @@ export default function POSSimulator({
 
                 <div className="mb-2">
                   <label className="text-[10px] font-black text-zinc-500 block mb-3 uppercase tracking-wider">
-                    Pilih Cara Bayar Pembeli
+                    PILIH METODE BAYAR
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
+                      disabled={isCompliment}
                       onClick={() => setPaymentMethod('Cash')}
                       className={`py-3.5 border rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 ${
-                        paymentMethod === 'Cash' 
+                        paymentMethod === 'Cash' && !isCompliment
                           ? 'bg-zinc-950 border-zinc-950 text-white shadow-md' 
                           : 'border-zinc-200 hover:bg-zinc-50 text-zinc-600'
-                      }`}
+                      } ${isCompliment ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      <Banknote className={`h-5 w-5 ${paymentMethod === 'Cash' ? 'text-emerald-400' : 'text-zinc-400'}`} />
-                      <span className="text-[10px] font-bold uppercase tracking-wider">Tunai</span>
+                      <Banknote className={`h-5 w-5 ${paymentMethod === 'Cash' && !isCompliment ? 'text-emerald-400' : 'text-zinc-400'}`} />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Tunai (Cash)</span>
                     </button>
                     <button
-                      onClick={() => setPaymentMethod('E-Wallet')}
+                      disabled={isCompliment}
+                      onClick={() => setPaymentMethod('Transfer')}
                       className={`py-3.5 border rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 ${
-                        paymentMethod === 'E-Wallet' 
+                        paymentMethod === 'Transfer' && !isCompliment
                           ? 'bg-zinc-950 border-zinc-950 text-white shadow-md' 
                           : 'border-zinc-200 hover:bg-zinc-50 text-zinc-600'
-                      }`}
+                      } ${isCompliment ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      <Wallet className={`h-5 w-5 ${paymentMethod === 'E-Wallet' ? 'text-sky-400' : 'text-zinc-400'}`} />
-                      <span className="text-[10px] font-bold uppercase tracking-wider">E-Wallet</span>
+                      <CreditCard className={`h-5 w-5 ${paymentMethod === 'Transfer' && !isCompliment ? 'text-sky-400' : 'text-zinc-400'}`} />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Transfer</span>
                     </button>
                     <button
-                      onClick={() => setPaymentMethod('Debit Card')}
+                      disabled={isCompliment}
+                      onClick={() => setPaymentMethod('QRIS')}
                       className={`py-3.5 border rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 ${
-                        paymentMethod === 'Debit Card' 
+                        paymentMethod === 'QRIS' && !isCompliment
                           ? 'bg-zinc-950 border-zinc-950 text-white shadow-md' 
                           : 'border-zinc-200 hover:bg-zinc-50 text-zinc-600'
-                      }`}
+                      } ${isCompliment ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      <CreditCard className={`h-5 w-5 ${paymentMethod === 'Debit Card' ? 'text-indigo-400' : 'text-zinc-400'}`} />
-                      <span className="text-[10px] font-bold uppercase tracking-wider">Debit</span>
+                      <QrCode className={`h-5 w-5 ${paymentMethod === 'QRIS' && !isCompliment ? 'text-fuchsia-400' : 'text-zinc-400'}`} />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">QRIS</span>
                     </button>
                   </div>
                   
-                  {/* Warning message added */}
+                  {/* Warning message moved here */}
                   <div className="mt-3 bg-red-50 text-red-800 p-3 rounded-xl border border-red-100 flex items-start gap-2">
                     <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                     <p className="text-[10px] font-bold leading-relaxed">
                       Pastikan uang sudah diterima / jika selain cash pastikan bukti pembayaran valid.
                     </p>
                   </div>
-
-                  <div className="mt-3 flex items-center justify-between bg-zinc-50 p-3 rounded-xl border border-zinc-200 cursor-pointer" onClick={() => setAutoPrint(!autoPrint)}>
-                    <div className="flex flex-col">
-                      <span className="text-xs font-black text-zinc-900">Cetak & Preview Struk</span>
-                      <span className="text-[10px] font-medium text-zinc-500">Jika mati, struk akan diarsipkan ke Google Drive</span>
+                  
+                  <div className="mt-4 bg-zinc-50 p-3 rounded-xl border border-zinc-200">
+                    <div 
+                      className="flex items-center justify-between cursor-pointer mb-2"
+                      onClick={() => setIsCompliment(!isCompliment)}
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-xs font-black text-zinc-900 uppercase">TANDAI SEBAGAI COMPLIMENT</span>
+                        <span className="text-[9px] font-medium text-zinc-500 block mt-0.5">transaksi tidak akan dihitung sebagai pemasukan</span>
+                      </div>
+                      <div className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${isCompliment ? 'bg-red-600' : 'bg-zinc-300'}`}>
+                        <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${isCompliment ? 'translate-x-5' : 'translate-x-1'}`} />
+                      </div>
                     </div>
-                    <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoPrint ? 'bg-red-600' : 'bg-zinc-300'}`}>
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoPrint ? 'translate-x-6' : 'translate-x-1'}`} />
+                    
+                    <div className="mt-3">
+                      <label className="text-[10px] font-black text-zinc-500 block mb-1.5 uppercase tracking-wider">
+                        Catatan Pesanan
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={catatan}
+                        onChange={(e) => setCatatan(e.target.value)}
+                        placeholder="Contoh: Jangan terlalu pedas, sambalnya dipisah, dll"
+                        className="w-full bg-white border border-zinc-200 text-xs text-zinc-900 rounded-lg p-2.5 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500 transition resize-none"
+                      />
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="p-5 border-t border-zinc-100 bg-white flex gap-3 shrink-0">
-                  <button
-                      onClick={() => setShowCheckoutModal(false)}
-                      className="px-6 py-4 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 font-extrabold text-xs rounded-xl transition active:scale-95 uppercase tracking-wider"
-                    >
-                      Kembali
-                    </button>
+              <div className="p-5 border-t border-zinc-100 bg-white flex flex-col gap-3 shrink-0">
+                  <div className="flex items-center justify-between bg-zinc-50 p-3 rounded-xl border border-zinc-200 cursor-pointer" onClick={() => setAutoPrint(!autoPrint)}>
+                    <div className="flex flex-col">
+                      <span className="text-xs font-black text-zinc-900">Cetak & Preview Struk</span>
+                      <span className="text-[10px] font-medium text-zinc-500">Jika mati, struk hanya diarsipkan oleh sistem</span>
+                    </div>
+                    <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoPrint ? 'bg-red-600' : 'bg-zinc-300'}`}>
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoPrint ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </div>
+                  </div>
                 <button
                   onClick={handleCheckout}
                   disabled={cart.length === 0}
-                  className="flex-1 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white font-extrabold text-xs py-4 rounded-xl transition flex items-center justify-center gap-2 shadow-md active:scale-95 cursor-pointer uppercase tracking-wider"
+                  className="w-full bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white font-extrabold text-xs py-4 rounded-xl transition flex items-center justify-center gap-2 shadow-md active:scale-95 cursor-pointer uppercase tracking-wider"
                 >
+                  <Printer className="h-4 w-4 shrink-0" />
                   {autoPrint ? 'Cetak Struk Sekarang' : 'Arsipkan ke Drive'}
                 </button>
               </div>
@@ -1081,8 +1250,8 @@ export default function POSSimulator({
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-50/50">
-                    {cart.map(item => (
-                      <div key={item.varian.ID_VARIAN} className="flex justify-between items-center bg-white p-3.5 rounded-2xl border border-zinc-100 shadow-sm">
+                    {effectiveCart.map(item => (
+                      <div key={item.id_detail} className="flex justify-between items-center bg-white p-3.5 rounded-2xl border border-zinc-100 shadow-sm">
                           <div className="min-w-0 flex-1">
                             <p className="text-[11px] font-black text-zinc-900 truncate">
                               <span className="text-red-700">{item.quantity}x</span> {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
@@ -1092,16 +1261,18 @@ export default function POSSimulator({
                             <p className="text-[11px] font-black text-zinc-950">
                               Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}
                             </p>
-                            <button 
-                              onClick={() => removeFromCart(item.varian.ID_VARIAN)}
-                              className="text-[9px] font-bold text-red-700 hover:underline mt-1 bg-red-50 px-2 py-0.5 rounded-md"
-                            >
-                              Hapus
-                            </button>
+                            {item.menu.ID_MENU !== 'PROMO' && (
+                              <button 
+                                onClick={() => removeFromCart(item.varian.ID_VARIAN)}
+                                className="text-[9px] font-bold text-red-700 hover:underline mt-1 bg-red-50 px-2 py-0.5 rounded-md"
+                              >
+                                Hapus
+                              </button>
+                            )}
                           </div>
                       </div>
                     ))}
-                    {cart.length === 0 && (
+                    {effectiveCart.length === 0 && (
                       <div className="h-full flex flex-col items-center justify-center text-zinc-400 py-10">
                           <ShoppingCart className="h-8 w-8 mb-2 opacity-20" />
                           <p className="text-[10px] font-bold uppercase tracking-widest">Keranjang Kosong</p>
@@ -1112,7 +1283,7 @@ export default function POSSimulator({
                     <div className="flex justify-between items-end mb-4 px-1">
                         <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Bayar</span>
                         <span className="text-lg font-black text-red-800">
-                          Rp{cart.reduce((sum, item) => sum + (item.varian.HARGA * item.quantity), 0).toLocaleString('id-ID')}
+                          Rp{checkoutTotal.toLocaleString('id-ID')}
                         </span>
                     </div>
                     <button 
@@ -1244,14 +1415,28 @@ export default function POSSimulator({
         {alertMessage && (
           <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95">
-                <div className="h-12 w-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto mb-4 border border-amber-200">
-                <AlertCircle className="h-6 w-6" />
-              </div>
-              <h3 className="text-sm font-black text-zinc-950 uppercase mb-2">Pemberitahuan</h3>
+              {alertType === 'success' && (
+                <div className="h-12 w-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 border border-emerald-100">
+                  <CheckCircle2 className="h-6 w-6" />
+                </div>
+              )}
+              {alertType === 'error' && (
+                <div className="h-12 w-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4 border border-rose-100">
+                  <XCircle className="h-6 w-6" />
+                </div>
+              )}
+              {alertType === 'warning' && (
+                <div className="h-12 w-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-4 border border-amber-200">
+                  <AlertCircle className="h-6 w-6" />
+                </div>
+              )}
+              <h3 className="text-sm font-black text-zinc-950 uppercase mb-2">
+                {alertType === 'success' ? 'Sukses' : alertType === 'error' ? 'Gagal' : 'Pemberitahuan'}
+              </h3>
               <p className="text-xs text-zinc-600 mb-6 leading-relaxed">{alertMessage}</p>
               <button 
                 onClick={() => setAlertMessage(null)} 
-                className="w-full py-3 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-xs uppercase cursor-pointer transition"
+                className="w-full py-3 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-xs uppercase cursor-pointer transition shadow-md active:scale-95"
               >
                 Mengerti
               </button>
@@ -1349,16 +1534,35 @@ export default function POSSimulator({
   if (!isCreatingTx) {
     const todayDate = new Date();
     const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-    const displayDateStr = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    const displayDateStr = new Date(selectedReportDate).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    
     const todayTxs = history.filter(tx => {
       const d = new Date(tx.timestamp);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
       const dStr = `${y}-${m}-${day}`;
-      return dStr === todayStr;
+      return dStr === selectedReportDate;
     });
-    const todayRevenue = todayTxs.reduce((sum, tx) => sum + tx.totalAmount, 0);
+    
+    let totalRevenue = 0;
+    let totalCash = 0;
+    let totalTransfer = 0;
+    
+    todayTxs.forEach(tx => {
+      const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+      if (!isCompliment) {
+        totalRevenue += tx.totalAmount;
+        const pm = String(tx.paymentMethod || '').toUpperCase();
+        if (pm === 'CASH' || pm === 'TUNAI' || pm === '') {
+          totalCash += tx.totalAmount;
+        } else {
+          totalTransfer += tx.totalAmount;
+        }
+      }
+    });
+
+    const isToday = selectedReportDate === todayStr;
 
     return (
       <>
@@ -1384,22 +1588,62 @@ export default function POSSimulator({
             {/* Omset Hari Ini Panel for Non-Admin */}
             {activeBranch !== 'ADMIN' && (
               <div className="space-y-3 mb-2 shrink-0">
+                <div className="flex justify-between items-center px-1">
+                  <h4 className="text-[13px] font-black text-zinc-800 tracking-tight flex items-center gap-2">Statistik {isToday ? 'Hari Ini' : 'Harian'}</h4>
+                  <div className="relative flex items-center gap-2 bg-white border border-zinc-200 shadow-sm hover:border-zinc-300 transition-all rounded-lg px-2.5 py-1.5 cursor-pointer">
+                    <Calendar className="h-3.5 w-3.5 text-emerald-650 shrink-0" />
+                    <span className="text-[10px] font-extrabold text-zinc-700 tracking-tight">
+                      {new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(selectedReportDate))}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                    <input 
+                      type="date"
+                      value={selectedReportDate}
+                      max={todayStr}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                           if (e.target.value > todayStr) {
+                             alert("Tidak bisa memilih tanggal di masa depan.");
+                           } else {
+                             setSelectedReportDate(e.target.value);
+                           }
+                        }
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden h-[100px]">
+                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
                     <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-emerald-50"><Banknote className="h-16 w-16" /></div>
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-0.5">Omset Hari Ini</span>
-                       <p className="text-lg font-black text-emerald-950 tracking-tight leading-none pt-0.5">Rp{todayRevenue.toLocaleString('id-ID')}</p>
+                       <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-0.5">Total Omset</span>
+                       <p className="text-sm font-black text-emerald-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalRevenue.toLocaleString('id-ID')}</p>
                     </div>
                   </div>
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden h-[100px]">
-                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-amber-50"><ListOrdered className="h-16 w-16" /></div>
+                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-amber-50"><ShoppingBag className="h-16 w-16" /></div>
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block mb-0.5">Transaksi Hari Ini</span>
+                       <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block mb-0.5">Total Pesanan</span>
                        <div className="flex flex-col gap-0.5 mt-0.5">
                          <p className="text-lg font-black text-amber-950 tracking-tight leading-none">{todayTxs.length}</p>
                          <span className="text-[9px] font-bold text-amber-500 uppercase tracking-widest leading-none">Selesai</span>
                        </div>
+                    </div>
+                  </div>
+                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-blue-50"><Coins className="h-16 w-16" /></div>
+                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                       <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-0.5">Total Cash</span>
+                       <p className="text-sm font-black text-blue-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalCash.toLocaleString('id-ID')}</p>
+                    </div>
+                  </div>
+                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-fuchsia-50"><CreditCard className="h-16 w-16" /></div>
+                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                       <span className="text-[10px] font-black text-fuchsia-800 uppercase tracking-widest block mb-0.5">Total Transfer</span>
+                       <p className="text-sm font-black text-fuchsia-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalTransfer.toLocaleString('id-ID')}</p>
                     </div>
                   </div>
                 </div>
@@ -1407,7 +1651,7 @@ export default function POSSimulator({
                   onClick={handleOpenReport}
                   className="w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/60 text-emerald-800 py-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition active:scale-95 shadow-sm mt-3"
                 >
-                   <Banknote className="h-4 w-4" /> Laporkan Omset Hari Ini
+                   <Banknote className="h-4 w-4" /> Laporkan Omset {isToday ? 'Hari Ini' : 'Harian'}
                 </button>
               </div>
             )}
@@ -1455,7 +1699,14 @@ export default function POSSimulator({
                       }`}
                     >
                       <div className="flex justify-between items-start">
-                        <p className={`text-xs font-extrabold truncate ${selectedTransaction?.id === tx.id ? 'text-red-800' : 'text-zinc-900'}`}>{tx.id}</p>
+                        <p className={`text-xs font-extrabold truncate flex items-center gap-1.5 ${selectedTransaction?.id === tx.id ? 'text-red-800' : 'text-zinc-900'}`}>
+                          {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
+                            <Gift className="h-3.5 w-3.5 text-amber-500 animate-pulse fill-amber-100 shrink-0" />
+                          ) : (
+                            <ReceiptText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                          )}
+                          {tx.id}
+                        </p>
                         <span className={`px-2 py-0.5 rounded text-[8px] font-black shrink-0 uppercase tracking-wider ${
                           tx.status === 'synced' 
                             ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/30' 
@@ -1468,7 +1719,7 @@ export default function POSSimulator({
                       <div className="flex justify-between items-end mt-2">
                         <div className="leading-tight">
                           <p className="text-[10px] text-zinc-500 font-medium">
-                            {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod}
+                            {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
                           </p>
                           <span 
                             className="text-[10px] text-red-750 font-bold hover:underline inline-flex items-center gap-0.5 mt-1 transition"
@@ -1508,7 +1759,11 @@ export default function POSSimulator({
                 </button>
               </div>
               <div className="p-5 max-h-[60vh] overflow-y-auto bg-neutral-100 flex justify-center">
-                 <ReceiptThermal transaction={selectedTransactionForKasir} branchName={derivedBranchName} />
+                 <ReceiptThermal 
+                   transaction={selectedTransactionForKasir} 
+                   branchName={derivedBranchName} 
+                   branchLocation={masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(selectedTransactionForKasir.cabang))?.LOKASI}
+                 />
               </div>
               <div className="p-4 border-t border-zinc-200 bg-zinc-50">
                 <button className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" onClick={() => printReceiptAndUpload(selectedTransactionForKasir)}>
@@ -1555,12 +1810,56 @@ export default function POSSimulator({
                   <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-3 font-sans relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-3 opacity-10"><Banknote className="w-20 h-20 text-emerald-500" /></div>
                     <div className="relative z-10 space-y-3">
-                      <p className="text-xs text-zinc-800 leading-relaxed font-medium">Halo, berikut adalah <b className="text-emerald-900">Laporan Omset Hari Ini</b>:</p>
+                      <p className="text-xs text-zinc-800 leading-relaxed font-medium">Halo, berikut adalah <b className="text-emerald-900">Laporan Omset {isToday ? 'Hari Ini' : 'Harian'}</b>:</p>
                       <div className="space-y-2 mt-2 bg-white/60 p-3 rounded-xl border border-emerald-100 backdrop-blur-sm text-left">
                         <p className="text-xs text-zinc-700 flex items-center gap-2"><Building className="h-4 w-4 shrink-0 text-zinc-500" /> <span><b className="text-zinc-900 break-words">Cabang:</b> {reportData.nama_cabang}</span></p>
-                        <p className="text-xs text-zinc-700 flex items-center gap-2"><Calendar className="h-4 w-4 shrink-0 text-zinc-500" /> <span><b className="text-zinc-900 break-words">Tanggal:</b> {new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date())}</span></p>
-                        <p className="text-xs text-zinc-700 flex items-center gap-2"><Banknote className="h-4 w-4 shrink-0 text-amber-500" /> <span><b className="text-zinc-900 break-words">Total Omset:</b> Rp{todayRevenue.toLocaleString('id-ID')}</span></p>
+                        <p className="text-xs text-zinc-700 flex items-center gap-2"><Calendar className="h-4 w-4 shrink-0 text-zinc-500" /> <span><b className="text-zinc-900 break-words">Tanggal:</b> {displayDateStr}</span></p>
+                        <p className="text-xs text-zinc-700 flex items-center gap-2"><Banknote className="h-4 w-4 shrink-0 text-amber-500" /> <span><b className="text-zinc-900 break-words">Total Omset:</b> Rp{totalRevenue.toLocaleString('id-ID')}</span></p>
+                        <p className="text-xs text-zinc-700 flex items-center gap-2 pl-6"><span><b className="text-zinc-900 break-words">Total Cash:</b> Rp{totalCash.toLocaleString('id-ID')}</span></p>
+                        <p className="text-xs text-zinc-700 flex items-center gap-2 pl-6"><span><b className="text-zinc-900 break-words">Total Transfer:</b> Rp{totalTransfer.toLocaleString('id-ID')}</span></p>
                         <p className="text-xs text-zinc-700 flex items-center gap-2"><Package className="h-4 w-4 shrink-0 text-zinc-500" /> <span><b className="text-zinc-900 break-words">Total Pesanan:</b> {todayTxs.length} Selesai</span></p>
+                      </div>
+                      <div className="space-y-2 mt-2 bg-white/60 p-3 rounded-xl border border-emerald-100 backdrop-blur-sm text-left">
+                        <p className="text-[11px] font-black text-zinc-800 uppercase tracking-tight mb-1">Rincian Menu Terjual:</p>
+                        {(() => {
+                           let menuSales: { [menuName: string]: { total: number, variants: { [variantName: string]: number } } } = {};
+                           todayTxs.forEach(tx => {
+                             tx.detail?.forEach(item => {
+                               const menu = item.NAMA_MENU || 'Unknown';
+                               const variant = item.VARIAN || 'Unknown';
+                               const qty = Number(item.QTY) || 1;
+                               
+                               if (!menuSales[menu]) {
+                                 menuSales[menu] = { total: 0, variants: {} };
+                               }
+                               menuSales[menu].total += qty;
+                               
+                               if (!menuSales[menu].variants[variant]) {
+                                 menuSales[menu].variants[variant] = 0;
+                               }
+                               menuSales[menu].variants[variant] += qty;
+                             });
+                           });
+                           const sortedMenus = Object.entries(menuSales).sort((a, b) => b[1].total - a[1].total);
+                           return sortedMenus.length === 0 ? (
+                             <p className="text-xs text-zinc-500 italic">Tidak ada menu terjual</p>
+                           ) : (
+                             <div className="space-y-2">
+                               {sortedMenus.map(([menu, data], idx) => (
+                                 <div key={idx} className="text-xs text-zinc-700">
+                                   <p className="font-semibold text-zinc-900">{idx + 1}. {menu}: {data.total}x dipesan</p>
+                                   <ul className="list-disc list-inside pl-2 text-[10px] text-zinc-600 mt-0.5 space-y-0.5">
+                                     {Object.entries(data.variants)
+                                       .sort(([_vA, qA], [_vB, qB]) => qB - qA)
+                                       .map(([variant, qty], vIdx) => (
+                                         <li key={vIdx}>{variant}: {qty}x dipesan</li>
+                                       ))}
+                                   </ul>
+                                 </div>
+                               ))}
+                             </div>
+                           )
+                        })()}
                       </div>
                       <div className="space-y-1 mt-2 bg-white/60 p-3 rounded-xl border border-emerald-100 backdrop-blur-sm text-left flex items-start gap-2">
                          <Folder className="h-4 w-4 shrink-0 text-sky-500 mt-0.5" />
@@ -1575,7 +1874,7 @@ export default function POSSimulator({
               <div className="p-4 border-t border-zinc-200 bg-zinc-50 flex gap-2">
                 <button 
                   className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed uppercase tracking-wider cursor-pointer gap-2" 
-                  onClick={() => handleSendWaReport(todayRevenue, todayTxs.length)}
+                  onClick={() => handleSendWaReport(totalRevenue, totalCash, totalTransfer, todayTxs, isToday, displayDateStr)}
                   disabled={isReporting || !!reportError || !reportData}
                 >
                   <Banknote className="h-4 w-4" /> Kirim Sekarang

@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Transaction, Cabang } from '../types';
-import { getTransactions, getTransactionsFromGAS } from '../utils/db';
-import { Search, Filter, X, ArrowLeft, ReceiptText, ChevronLeft, ChevronRight, CalendarClock, Printer, Trash2, Database, Plus, RefreshCw } from 'lucide-react';
+import { getTransactions, getTransactionsFromGAS, getPrintedTransactionIds } from '../utils/db';
+import { Search, Filter, X, ArrowLeft, ReceiptText, ChevronLeft, ChevronRight, CalendarClock, Printer, Trash2, Database, Plus, RefreshCw, Gift } from 'lucide-react';
 import ReceiptThermal from './ReceiptThermal';
 
 type SortOrder = 'newest' | 'oldest';
 interface HistoryFilterState {
   status: 'All' | 'Online' | 'Offline';
   sortOrder: SortOrder;
-  paymentMethod: 'All' | 'Cash' | 'E-Wallet' | 'Debit Card';
+  paymentMethod: 'All' | 'Cash' | 'Transfer' | 'QRIS';
   date: string | null;
   branch: string; // 'All' or specific branch ID (only for ADMIN)
+  jenisPesanan: 'All' | 'Normal' | 'Compliment';
 }
 
 interface HistoryPageProps {
@@ -29,7 +31,8 @@ const getDefaultFilterState = (initialBranchFilter?: string): HistoryFilterState
     sortOrder: 'newest',
     paymentMethod: 'All',
     date: null,
-    branch: initialBranchFilter || 'All'
+    branch: initialBranchFilter || 'All',
+    jenisPesanan: 'All'
   };
 };
 
@@ -46,6 +49,18 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
   const [historyModalTx, setHistoryModalTx] = useState<Transaction | null>(null);
   const [isFetchingHistory, setIsFetchingHistory] = useState<boolean>(false);
   const lastFetchParamsRef = useRef<string>('');
+  const [printedIds, setPrintedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setPrintedIds(getPrintedTransactionIds());
+    const handleUpdate = () => {
+      setPrintedIds(getPrintedTransactionIds());
+    };
+    window.addEventListener('printed-transactions-updated', handleUpdate);
+    return () => {
+      window.removeEventListener('printed-transactions-updated', handleUpdate);
+    };
+  }, []);
 
   // Pull to refresh gestures
   const [startY, setStartY] = useState<number | null>(null);
@@ -213,6 +228,14 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
     filteredHistory = filteredHistory.filter(tx => tx.paymentMethod === appliedHistoryFilter.paymentMethod);
   }
 
+  if (appliedHistoryFilter.jenisPesanan && appliedHistoryFilter.jenisPesanan !== 'All') {
+    const isComplimentFilter = appliedHistoryFilter.jenisPesanan === 'Compliment';
+    filteredHistory = filteredHistory.filter(tx => {
+      const isCompliment = String(tx.pesanan?.JENIS_PESANAN || '').toUpperCase() === 'COMPLIMENT';
+      return isComplimentFilter ? isCompliment : !isCompliment;
+    });
+  }
+
   if (appliedHistoryFilter.date) {
       filteredHistory = filteredHistory.filter(tx => new Date(tx.timestamp).toLocaleDateString('en-CA') === appliedHistoryFilter.date);
   }
@@ -231,6 +254,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                             (appliedHistoryFilter.paymentMethod !== 'All' ? 1 : 0) +
                             (appliedHistoryFilter.sortOrder !== 'newest' ? 1 : 0) +
                             (appliedHistoryFilter.date ? 1 : 0) +
+                            (appliedHistoryFilter.jenisPesanan && appliedHistoryFilter.jenisPesanan !== 'All' ? 1 : 0) +
                             (activeBranch === 'ADMIN' && appliedHistoryFilter.branch !== 'All' ? 1 : 0);
 
   const isFilterOrSearchActive = activeFilterCount > 0 || (isSearchHistoryActive && historySearchQuery);
@@ -371,7 +395,21 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                         }`}
                       >
                         <div className="flex justify-between items-start">
-                          <p className={`text-xs font-extrabold truncate text-zinc-900`}>{tx.id}</p>
+                          <div className="flex items-center gap-2 max-w-[70%]">
+                            <p className="text-xs font-extrabold truncate text-zinc-900 flex items-center gap-1.5">
+                              {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
+                                <Gift className="h-3.5 w-3.5 text-amber-500 animate-pulse fill-amber-100 shrink-0" />
+                              ) : (
+                                <ReceiptText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                              )}
+                              {tx.id}
+                            </p>
+                            {printedIds.includes(tx.id) && (
+                              <span className="inline-flex items-center justify-center text-emerald-600 bg-emerald-50 p-1 rounded border border-emerald-100 hover:bg-emerald-100 transition shrink-0" title="Struk Sudah Dicetak">
+                                <Printer className="h-3 w-3 text-emerald-600" />
+                              </span>
+                            )}
+                          </div>
                           <span className={`px-2 py-0.5 rounded text-[8px] font-black shrink-0 uppercase tracking-wider ${
                             tx.status === 'synced' 
                               ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/30' 
@@ -383,15 +421,15 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                         <div className="flex justify-between items-end mt-2">
                           <div className="leading-tight">
                             <p className="text-[10px] text-zinc-500 font-medium whitespace-nowrap mb-1">
-                              {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod}
+                              {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
                             </p>
                             {activeBranch === 'ADMIN' && (
-                              <p className="text-[10px] text-zinc-400 font-medium mb-1">
-                                Cabang: {cabangList.find(c => String(c.ID_CABANG) === tx.cabang)?.NAMA_CABANG || tx.cabang}
+                              <p className="text-[10px] text-zinc-400 font-medium mb-1 border-red-50/50 bg-neutral-100/50 px-2.5 py-1 rounded inline-block">
+                                Cabang: {cabangList.find(c => String(c.ID_CABANG) === String(tx.cabang))?.NAMA_CABANG || tx.cabang}
                               </p>
                             )}
                             <span className="text-[10px] text-red-750 font-bold hover:underline inline-flex items-center gap-0.5 transition">
-                              {activeBranch === 'ADMIN' ? 'Lihat Detail Pesanan' : 'Lihat Cetak Struk Kasir'}
+                              {activeBranch === 'ADMIN' ? 'Lihat Detail Pesanan' : 'Lihat Cetak Struk'}
                             </span>
                           </div>
                           <div className="text-right">
@@ -497,11 +535,26 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                       onClick={() => setTempHistoryFilter({...tempHistoryFilter, paymentMethod: 'Cash'})}
                       className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.paymentMethod === 'Cash' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Cash</button>
                     <button 
-                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, paymentMethod: 'E-Wallet'})}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.paymentMethod === 'E-Wallet' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>E-Wallet</button>
+                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, paymentMethod: 'Transfer'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.paymentMethod === 'Transfer' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Transfer</button>
                     <button 
-                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, paymentMethod: 'Debit Card'})}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.paymentMethod === 'Debit Card' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Debit Card</button>
+                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, paymentMethod: 'QRIS'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.paymentMethod === 'QRIS' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>QRIS</button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Jenis Pesanan</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button 
+                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, jenisPesanan: 'All'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.jenisPesanan === 'All' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Semua</button>
+                    <button 
+                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, jenisPesanan: 'Normal'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.jenisPesanan === 'Normal' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Normal</button>
+                    <button 
+                      onClick={() => setTempHistoryFilter({...tempHistoryFilter, jenisPesanan: 'Compliment'})}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${tempHistoryFilter.jenisPesanan === 'Compliment' ? 'bg-red-50 border-red-700 text-red-800' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>Compliment</button>
                   </div>
                 </div>
             </div>
@@ -517,9 +570,9 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
           </div>
         </div>
       )}
-      {historyModalTx && (
-        <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm flex justify-center items-center p-4 animate-in fade-in duration-200" onClick={() => setHistoryModalTx(null)}>
-          <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+      {historyModalTx && createPortal(
+        <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm transition-all duration-200" onClick={() => setHistoryModalTx(null)}>
+          <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[100001] max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50">
               <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
                 {activeBranch === 'ADMIN' ? 'Detail Pesanan' : 'Pratinjau Struk'}
@@ -541,7 +594,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                       <p className="text-sm font-black text-zinc-900 mt-1">{historyModalTx.id}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{historyModalTx.paymentMethod}</p>
+                      <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{historyModalTx.paymentMethod || (historyModalTx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}</p>
                     </div>
                   </div>
                   <div className="space-y-4">
@@ -551,21 +604,21 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                     </div>
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-zinc-500 font-medium whitespace-nowrap">Cabang</span>
-                      <span className="text-zinc-900 font-bold text-right">{cabangList.find(c => String(c.ID_CABANG) === historyModalTx.cabang)?.NAMA_CABANG || historyModalTx.cabang}</span>
+                      <span className="text-zinc-900 font-bold text-right">{cabangList.find(c => String(c.ID_CABANG) === String(historyModalTx.cabang))?.NAMA_CABANG || historyModalTx.cabang}</span>
                     </div>
                     <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
                       <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>
                       <div className="space-y-3 relative before:absolute before:inset-y-0 before:left-[-1px] before:w-[3px] before:bg-zinc-100 before:rounded-full ml-1 pl-3">
                         {historyModalTx.detail?.map((item, idx) => (
-                          <div key={idx} className="flex justify-between items-start text-sm pb-3 last:pb-0">
-                            <div className="text-left font-medium text-zinc-800">
-                              <span className="font-bold text-zinc-900">{item.QTY}x</span> {item.NAMA_MENU} 
-                              {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
-                            </div>
-                            <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
-                              Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
-                            </div>
-                          </div>
+                           <div key={idx} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                             <div className="text-left font-medium text-zinc-800">
+                               <span className="font-bold text-zinc-900">{item.QTY}x</span> {item.NAMA_MENU} 
+                               {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
+                             </div>
+                             <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
+                               Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
+                             </div>
+                           </div>
                         ))}
                       </div>
                     </div>
@@ -578,7 +631,11 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                   </div>
                 </div>
               ) : (
-                <ReceiptThermal transaction={historyModalTx} branchName={cabangList.find(c => String(c.ID_CABANG) === historyModalTx.cabang)?.NAMA_CABANG || historyModalTx.cabang || activeBranch} />
+                <ReceiptThermal 
+                  transaction={historyModalTx} 
+                  branchName={cabangList.find(c => String(c.ID_CABANG) === historyModalTx.cabang)?.NAMA_CABANG || historyModalTx.cabang || activeBranch} 
+                  branchLocation={cabangList.find(c => String(c.ID_CABANG) === String(historyModalTx.cabang))?.LOKASI}
+                />
               )}
             </div>
             
@@ -590,7 +647,8 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

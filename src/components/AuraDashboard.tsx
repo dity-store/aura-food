@@ -1,8 +1,9 @@
+import confetti from 'canvas-confetti';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Transaction } from '../types';
 import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics, triggerGASSyncRekapHarian } from '../utils/db';
-import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown, Banknote, CreditCard } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown, Banknote, CreditCard, Gift } from 'lucide-react';
 import { getSessionCache, setSessionDashboard, setSessionFilters } from '../utils/sessionCache';
 
 const getTodayLocalDateStr = () => {
@@ -129,6 +130,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       await triggerGASSyncRekapHarian(selectedAdminDate);
       setToastType('success');
       setToastMessage("Rekap Harian berhasil direkap!");
+      confetti({
+        particleCount: 150,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
       loadStats(true); // reload stats
     } catch (e: any) {
       setToastType('error');
@@ -170,6 +176,17 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
     const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
     const currentParamsKey = JSON.stringify({ activeBranch, currentBranch, selectedAdminDate });
+
+    if (!forceRemote && session.dashboard.lastParams === currentParamsKey && session.dashboard.data) {
+      setAdminMetrics(session.dashboard.data);
+      try {
+        const queue = await getSyncQueue();
+        setAllQueue(queue);
+      } catch (queueErr) {
+        console.error("Gagal memuat sync queue:", queueErr);
+      }
+      return;
+    }
 
     if (!forceRemote) {
       const cached = localStorage.getItem(cacheKey);
@@ -238,7 +255,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           }
         });
 
-        const revenue = currentTransactions.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+        const revenue = currentTransactions.reduce((sum, tx) => {
+          const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+          if (isCompliment) return sum;
+          return sum + (tx.totalAmount || 0);
+        }, 0);
         const transCount = currentTransactions.length;
         const avg = transCount > 0 ? Math.round(revenue / transCount) : 0;
         
@@ -282,7 +303,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                   return dStr === yesterdayDateStr;
                 } catch { return false; }
               })());
-          yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+          yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => {
+            const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+            if (isCompliment) return sum;
+            return sum + (tx.totalAmount || 0);
+          }, 0);
         } catch (e) {
           console.error("Error calculating local yesterday revenue:", e);
         }
@@ -290,6 +315,9 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         let localTotalCash = 0;
         let localTotalTransfer = 0;
         currentTransactions.forEach(tx => {
+          const isCompliment = String(tx.pesanan?.JENIS_PESANAN || '').toUpperCase() === 'COMPLIMENT';
+          if (isCompliment) return;
+          
           const method = String(tx.paymentMethod || '').toUpperCase();
           if (method === 'CASH' || method === 'TUNAI') {
             localTotalCash += tx.totalAmount || 0;
@@ -377,7 +405,10 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const breakdown = Object.keys(grouped).map(cbId => {
       const c = cabangList.find(cab => String(cab.ID_CABANG) === cbId);
       const txs = grouped[cbId];
-      const revenue = txs.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+      const revenue = txs.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        return isCompliment ? sum : sum + (tx.totalAmount || 0);
+      }, 0);
       return {
         id: cbId,
         name: c ? c.NAMA_CABANG : `Cabang ${cbId}`,
@@ -388,6 +419,46 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     }).filter(b => b.revenue > 0 || b.txsCount > 0);
 
     return breakdown;
+  };
+
+  const getLaporanText = () => {
+    const dNow = new Date(selectedAdminDate);
+    const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
+    const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
+    
+    const breakdown = getBranchBreakdown();
+    let breakdownText = "";
+    let rincianPesananText = "";
+
+    breakdown.forEach(b => {
+      breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
+      rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
+      b.txs.forEach((tx, idx) => {
+        let formattedDate = "";
+        try {
+          const d = new Date(tx.timestamp);
+          formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        } catch {
+          formattedDate = selectedAdminDate;
+        }
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        const complimentText = isCompliment ? ' (Compliment)' : '';
+        rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
+      });
+    });
+
+    return `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
+      `*Tanggal:* ${hari}, ${tglText}\n` +
+      `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
+      `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
+      `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
+      `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
+      `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
+      `*Rincian Omset per Cabang:*\n` +
+      breakdownText +
+      rincianPesananText + `\n` +
+      `Terima kasih!`;
   };
 
   const getRevenueGrowthStyles = () => {
@@ -435,15 +506,23 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
   const totalRevenue = isServerAdmin 
     ? adminMetrics!.totalRevenue 
-    : transactions.reduce((sum, tx) => sum + (tx.totalAmount || 0), 0);
+    : transactions.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        return isCompliment ? sum : sum + (tx.totalAmount || 0);
+      }, 0);
 
   const totalTransactionsCount = isServerAdmin
     ? adminMetrics!.totalTransactions
-    : transactions.length;
+    : transactions.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        return isCompliment ? sum : sum + 1;
+      }, 0);
 
   const totalCashVal = isServerAdmin
     ? (adminMetrics!.totalCash || 0)
     : transactions.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        if (isCompliment) return sum;
         const method = String(tx.paymentMethod || '').toUpperCase();
         return (method === 'CASH' || method === 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
       }, 0);
@@ -451,6 +530,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   const totalTransferVal = isServerAdmin
     ? (adminMetrics!.totalTransfer || 0)
     : transactions.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        if (isCompliment) return sum;
         const method = String(tx.paymentMethod || '').toUpperCase();
         return (method !== 'CASH' && method !== 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
       }, 0);
@@ -603,9 +684,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
             <span className="p-2 rounded-xl bg-orange-50 text-orange-600 border border-orange-100">
               <Landmark className="h-5 w-5" />
             </span>
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${getRevenueGrowthStyles().classes}`}>
-              {getRevenueGrowthStyles().text}
-            </span>
+            {!loadingMetrics && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${getRevenueGrowthStyles().classes}`}>
+                {getRevenueGrowthStyles().text}
+              </span>
+            )}
           </div>
           <div className="mt-4">
             <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-extrabold">Total Omset</p>
@@ -703,6 +786,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       {/* DETAILED STATS ROW */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
+
         {/* STATS VISUAL SPLIT */}
         <div className="bg-white border border-zinc-200/80 p-5 rounded-2xl shadow-sm space-y-4">
           <h4 className="text-xs font-bold text-zinc-900 uppercase tracking-wider flex items-center justify-between">
@@ -743,7 +827,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               {tSales === 0 ? (
                 <p>Belum ada rekaman preferensi menu pelanggan.</p>
               ) : Math.max(mak, min, pas, spe) === mak ? (
-                <p>Pelanggan paling gemar membeli jenis <strong>Makanan</strong> harian.</p>
+                <p>Pelanggan paling gemar membeli jenis <strong>Makanan</strong> hari ini.</p>
               ) : Math.max(mak, min, pas, spe) === min ? (
                 <p>Pelanggan paling suka menikmati pesanan <strong>Minuman</strong> dingin menyegarkan.</p>
               ) : Math.max(mak, min, pas, spe) === pas ? (
@@ -794,15 +878,27 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                   className="flex items-center justify-between p-3 rounded-xl border border-zinc-100 transition group hover:bg-zinc-50 cursor-pointer active:scale-95"
                 >
                   <div className="flex items-center gap-3 truncate">
-                    <div className="h-2 w-2 rounded-full bg-zinc-400 shrink-0 group-hover:bg-red-500 transition"></div>
+                    {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
+                      <Gift className="h-5 w-5 text-amber-500 fill-amber-100 shrink-0 p-0.5" />
+                    ) : (
+                      <ReceiptText className="h-5 w-5 text-zinc-400 shrink-0 p-0.5" />
+                    )}
                     <div className="truncate text-left">
                       <p className="text-xs font-bold text-zinc-950 truncate group-hover:text-red-800 transition">{tx.id}</p>
-                      <p className="text-[10px] text-zinc-400 mt-0.5">
-                        {tx.timestamp ? (
-                          isNaN(new Date(tx.timestamp).getTime())
-                            ? String(tx.timestamp)
-                            : new Date(tx.timestamp).toLocaleString('id-ID')
-                        ) : 'Beberapa saat yang lalu'} &bull; {tx.paymentMethod}
+                      <p className="text-[10px] text-zinc-400 mt-0.5 flex items-center gap-1 flex-wrap">
+                        <span>
+                          {tx.timestamp ? (
+                            isNaN(new Date(tx.timestamp).getTime())
+                              ? String(tx.timestamp)
+                              : new Date(tx.timestamp).toLocaleString('id-ID')
+                          ) : 'Beberapa saat yang lalu'}
+                        </span>
+                        <span>&bull;</span>
+                        <span className="uppercase text-[9px] font-bold text-zinc-500">{tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}</span>
+                        <span>&bull;</span>
+                        <span className="font-extrabold text-[9px] text-red-750 bg-red-50/80 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                          {cabangList.find(c => String(c.ID_CABANG) === String(tx.cabang))?.NAMA_CABANG || `Cabang ${tx.cabang}`}
+                        </span>
                       </p>
                     </div>
                   </div>
@@ -929,10 +1025,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                             } catch {
                               formattedDate = selectedAdminDate;
                             }
+                            const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
                             return (
                               <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
                                 <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
-                                <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}</span>
+                                <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
                               </div>
                             );
                           })}
@@ -951,43 +1048,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
             <div className="p-4 border-t border-zinc-200 bg-zinc-50 grid grid-cols-2 gap-2">
               <button 
                 onClick={() => {
-                  const dNow = new Date(selectedAdminDate);
-                  const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
-                  const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-                  const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
-                  
-                  const breakdown = getBranchBreakdown();
-                  let breakdownText = "";
-                  let rincianPesananText = "";
-
-                  breakdown.forEach(b => {
-                    breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
-                    rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
-                    b.txs.forEach((tx, idx) => {
-                      let formattedDate = "";
-                      try {
-                        const d = new Date(tx.timestamp);
-                        formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-                      } catch {
-                        formattedDate = selectedAdminDate;
-                      }
-                      rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}\n`;
-                    });
-                  });
-                  
-                  const txt = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
-                    `*Tanggal:* ${hari}, ${tglText}\n` +
-                    `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
-                    `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
-                    `*Rincian Omset per Cabang:*\n` +
-                    breakdownText +
-                    rincianPesananText + `\n` +
-                    `Terima kasih!`;
-
-                  navigator.clipboard.writeText(txt);
+                  navigator.clipboard.writeText(getLaporanText());
                   setToastType('success');
                   setToastMessage("Berhasil disalin ke papan klip!");
                   setShowLaporModal(false);
@@ -999,43 +1060,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               </button>
               <button 
                 onClick={() => {
-                  const dNow = new Date(selectedAdminDate);
-                  const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
-                  const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-                  const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
-                  
-                  const breakdown = getBranchBreakdown();
-                  let breakdownText = "";
-                  let rincianPesananText = "";
-
-                  breakdown.forEach(b => {
-                    breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
-                    rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
-                    b.txs.forEach((tx, idx) => {
-                      let formattedDate = "";
-                      try {
-                        const d = new Date(tx.timestamp);
-                        formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-                      } catch {
-                        formattedDate = selectedAdminDate;
-                      }
-                      rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}\n`;
-                    });
-                  });
-                  
-                  const txtUrl = `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
-                    `*Tanggal:* ${hari}, ${tglText}\n` +
-                    `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
-                    `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
-                    `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
-                    `*Rincian Omset per Cabang:*\n` +
-                    breakdownText +
-                    rincianPesananText + `\n` +
-                    `Terima kasih!`;
-
-                  const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(txtUrl)}`;
+                  const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(getLaporanText())}`;
                   window.open(url, '_blank');
                   setToastType('success');
                   setToastMessage("Berhasil dibagikan ke WhatsApp!");

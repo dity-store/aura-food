@@ -65,7 +65,7 @@ export default function App() {
   
   const [activeTab, setActiveTab] = useState<TabTypes>(() => {
     const branch = localStorage.getItem('AURA_FOOD_BRANCH') || '';
-    if (branch === 'ADMIN') return 'admin';
+    if (branch === 'ADMIN') return 'dashboard';
     return 'pos';
   });
   const [historyBranchFilter, setHistoryBranchFilter] = useState<string>('');
@@ -465,7 +465,7 @@ export default function App() {
            localStorage.setItem('AURA_FOOD_BRANCH_NAME', cleanBranch);
            setActiveBranch(cleanBranch);
            setStoredBranchName(cleanBranch);
-           setActiveTab('admin');
+           setActiveTab('dashboard');
            setLoginError('');
            setLoginPassword('');
            setIsCheckoutPageActive(false);
@@ -807,7 +807,7 @@ export default function App() {
  
             <div className="pt-2 text-center flex flex-col items-center gap-2">
               <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
-                Aura Food Kasir V.1.0
+                Aura Food Kasir V.1.1
               </span>
             </div>
           </div>
@@ -925,7 +925,7 @@ export default function App() {
               <div id="thermal-section" className="border-t border-zinc-200 pt-10 mt-12 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="flex flex-col items-center gap-2">
                   <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-50 text-red-800 rounded-full text-[10px] font-black uppercase tracking-widest border border-red-100">
-                    <ReceiptText className="h-3 w-3" /> {activeBranch === 'ADMIN' ? 'Detail Transaksi' : 'Pratinjau Struk Kasir'}
+                    <ReceiptText className="h-3 w-3" /> {activeBranch === 'ADMIN' ? 'Detail Transaksi' : 'Pratinjau Struk'}
                   </div>
                   <button 
                     onClick={() => setSelectedTx(null)}
@@ -944,7 +944,7 @@ export default function App() {
                           <p className="text-sm font-black text-zinc-900 mt-1">{selectedTx.id}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{selectedTx.paymentMethod}</p>
+                          <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{selectedTx.paymentMethod || (selectedTx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}</p>
                         </div>
                       </div>
                       <div className="space-y-4">
@@ -978,7 +978,11 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <ReceiptThermal transaction={selectedTx} branchName={activeBranchName} />
+                      <ReceiptThermal 
+                        transaction={selectedTx} 
+                        branchName={activeBranchName} 
+                        branchLocation={cabangList.find(c => String(c.ID_CABANG) === String(selectedTx.cabang))?.LOKASI}
+                      />
                       <div className="max-w-[340px] mx-auto pt-6 pb-20">
                          <button 
                            onClick={async () => {

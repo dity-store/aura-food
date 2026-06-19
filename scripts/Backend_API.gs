@@ -77,7 +77,16 @@ function doPost(e) {
     // 3. FITUR POST TRANSAKSI
     if (payload.mode === "POST_TRANSACTION") {
       const p = payload.payload.pesanan;
-      ss.getSheetByName("Data_Pesanan").appendRow([p.ID_PESANAN, p.TANGGAL_WAKTU, p.ID_CABANG, p.TOTAL_TAGIHAN, p.METODE_BAYAR, "Sukses"]);
+      ss.getSheetByName("Data_Pesanan").appendRow([
+        p.ID_PESANAN, 
+        p.TANGGAL_WAKTU, 
+        p.ID_CABANG, 
+        p.TOTAL_TAGIHAN, 
+        p.METODE_BAYAR, 
+        "Sukses", 
+        p.JENIS_PESANAN || "Normal", 
+        p.CATATAN || ""
+      ]);
       payload.payload.detail.forEach(i => {
         ss.getSheetByName("Detail_Pesanan").appendRow([i.ID_DETAIL, p.ID_PESANAN, i.NAMA_MENU, i.VARIAN, i.HARGA_SATUAN, i.QTY, i.SUBTOTAL]);
       });

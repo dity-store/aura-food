@@ -2,7 +2,7 @@ import jsPDF from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import { Transaction } from '../types';
 import { getFormattedMenuDisplay } from './formatter';
-import { getGASConfig } from './db';
+import { getGASConfig, getMasterData } from './db';
 
 /**
  * Generates a clean, professional PDF using text-based commands (selectable text)
@@ -10,6 +10,10 @@ import { getGASConfig } from './db';
  */
 export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: string) => {
   try {
+    const masterData = await getMasterData().catch(() => null);
+    const branchObj = masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(tx.cabang || activeBranch));
+    const finalBranchLocation = branchObj?.LOKASI || 'Jl. R Suprapto, Taman Sari, Mataram';
+
     // PDF Size: 80mm width (thermal), dynamic height
     // We estimate height based on items
     const itemHeight = 8;
@@ -35,7 +39,7 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     
     pdf.setFont('courier', 'normal');
     pdf.setFontSize(8);
-    pdf.text('Jl. R Suprapto, Taman Sari, Mataram', centerX, y, { align: 'center' });
+    pdf.text(finalBranchLocation, centerX, y, { align: 'center' });
     y += 4;
     pdf.text('Telp: 0821 4752 1751', centerX, y, { align: 'center' });
     y += 4;
@@ -53,8 +57,12 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     
     pdf.text('No.', labelX, y); pdf.text(`: ${tx.id}`, valueX, y); y += 4;
     pdf.text('Tgl.', labelX, y); pdf.text(`: ${new Date(tx.timestamp).toLocaleString('id-ID')}`, valueX, y); y += 4;
-    pdf.text('Kasir', labelX, y); pdf.text(`: REGULER`, valueX, y); y += 4;
-    pdf.text('Metode', labelX, y); pdf.text(`: ${tx.paymentMethod.toUpperCase()}`, valueX, y); y += 5;
+    pdf.text('Metode', labelX, y); pdf.text(`: ${tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'GRATIS' : tx.paymentMethod.toUpperCase()}`, valueX, y); y += 4;
+    
+    if (tx.pesanan?.JENIS_PESANAN === 'Compliment') {
+      pdf.text('Status', labelX, y); pdf.text(': COMPLIMENT', valueX, y); y += 4;
+    }
+    y += 1;
 
     // Separator
     pdf.text('------------------------------------------', centerX, y, { align: 'center' });
@@ -102,7 +110,18 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     pdf.setFont('courier', 'bold');
     pdf.text('TOTAL', 5, y);
     pdf.text(`Rp${tx.totalAmount.toLocaleString('id-ID')}`, 75, y, { align: 'right' });
-    y += 10;
+    y += 8;
+
+    if (tx.pesanan?.CATATAN) {
+      pdf.setFontSize(8);
+      pdf.setFont('courier', 'bold');
+      pdf.text('Catatan:', 5, y);
+      y += 4;
+      pdf.setFont('courier', 'normal');
+      const splitCatatan = pdf.splitTextToSize(tx.pesanan.CATATAN, 70);
+      pdf.text(splitCatatan, 5, y);
+      y += (splitCatatan.length * 4) + 4;
+    }
 
     // Footer
     pdf.setFontSize(8);

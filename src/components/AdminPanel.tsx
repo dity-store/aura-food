@@ -27,7 +27,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { getMasterData, saveMasterData, syncMasterDataFromGAS, postUniversalDataToGAS, fetchUniversalDataFromGAS } from '../utils/db';
-import { MasterData, Cabang, Kategori, Menu, Varian } from '../types';
+import { MasterData, Cabang, Kategori, Menu, Varian, Promo } from '../types';
 import { getSessionCache } from '../utils/sessionCache';
 
 interface SelectionContextType {
@@ -236,7 +236,7 @@ interface AdminPanelProps {
   onModuleActiveChange?: (isActive: boolean) => void;
 }
 
-type TabType = 'kas' | 'cabang' | 'kategori' | 'menu' | 'varian' | 'inventaris' | 'shift';
+type TabType = 'kas' | 'cabang' | 'kategori' | 'menu' | 'varian' | 'inventaris' | 'shift' | 'promo';
 
 export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }: AdminPanelProps) {
   const [activeModule, setActiveModule] = useState<TabType | null>(null);
@@ -289,6 +289,14 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   // Back button interception for Android
   // Basic Form States
   const [formData, setFormData] = useState<any>({ STATUS: 'Tersedia' });
+  const [promoVariantSearch, setPromoVariantSearch] = useState('');
+
+  const getVariantDisplayLabel = (variantId: string): string => {
+    const v = master?.varian?.find(x => String(x.ID_VARIAN) === String(variantId));
+    if (!v) return variantId;
+    const m = master?.menu?.find(x => String(x.ID_MENU) === String(v.ID_MENU));
+    return m ? `${m.NAMA_MENU} (${v.NAMA_VARIAN})` : v.NAMA_VARIAN;
+  };
   const [originalEditData, setOriginalEditData] = useState<any>(null);
   const [initialFormData, setInitialFormData] = useState<any>(null);
 
@@ -514,21 +522,14 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     if (module === 'shift') {
       return generateClientSideId('SFT-', shiftData || [], 'ID_IZIN');
     }
+    if (module === 'promo') {
+      return generateClientSideId('PRM-', master?.promo || [], 'ID_PROMO');
+    }
     return '';
   };
 
   const getIsEditing = () => {
-    if (!formData) return false;
-    if (showModal === 'kas') {
-      return !!formData._id_or_original;
-    }
-    if (showModal === 'inventaris') return !!formData.ID_LOG;
-    if (showModal === 'shift') return !!formData.ID_IZIN;
-    if (showModal === 'cabang') return !!formData.ID_CABANG;
-    if (showModal === 'kategori') return !!formData.ID_KATEGORI;
-    if (showModal === 'menu') return !!formData.ID_MENU;
-    if (showModal === 'varian') return !!formData.ID_VARIAN;
-    return false;
+    return !!originalEditData;
   };
 
   const checkRequiredFields = (): boolean => {
@@ -584,6 +585,14 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       return !!kat && !!menu && !!String(nm).trim() && hrg > 0;
     }
     
+    if (showModal === 'promo') {
+      const nama = formData.NAMA_PROMO;
+      const tipe = formData.TIPE;
+      const targetItem = formData.TARGET_ITEM;
+      const nilai = Number(formData.NILAI_PROMO || 0);
+      return !!String(nama).trim() && !!tipe && !!String(targetItem).trim() && nilai > 0;
+    }
+    
     return false;
   };
 
@@ -610,6 +619,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       keysToCheck = ['ID_KATEGORI', 'NAMA_MENU'];
     } else if (showModal === 'varian') {
       keysToCheck = ['ID_KATEGORI', 'ID_MENU', 'NAMA_VARIAN', 'HARGA', 'STATUS'];
+    } else if (showModal === 'promo') {
+      keysToCheck = ['NAMA_PROMO', 'TIPE', 'TARGET_ITEM', 'SYARAT_QTY', 'NILAI_PROMO'];
     }
     
     for (const key of keysToCheck) {
@@ -848,6 +859,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       } else if (activeModule === 'varian') {
         sheetName = 'Master_Varian';
         idCol = 'ID_VARIAN';
+      } else if (activeModule === 'promo') {
+        sheetName = 'Master_Promo';
+        idCol = 'ID_PROMO';
       }
 
       if (sheetName && idCol) {
@@ -892,6 +906,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           newData.menu = newData.menu.filter((m: any) => !selectedIds.includes(m.ID_MENU) && !selectedIds.includes(m.NAMA_MENU));
         } else if (activeModule === 'varian') {
           newData.varian = newData.varian.filter((v: any) => !selectedIds.includes(v.ID_VARIAN) && !selectedIds.includes(v.NAMA_VARIAN));
+        } else if (activeModule === 'promo') {
+          newData.promo = (newData.promo || []).filter((p: any) => !selectedIds.includes(p.ID_PROMO) && !selectedIds.includes(p.NAMA_PROMO));
         }
         await saveMasterData(newData);
         setMaster(newData);
@@ -981,6 +997,14 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
             saldoBersih: 0
           }));
         }
+      } else if (id === 'promo') {
+        setIsUniversalLoading(true);
+        const data = await fetchUniversalDataFromGAS('Master_Promo');
+        if (master) {
+          const newData = { ...master, promo: data || [] };
+          await saveMasterData(newData);
+          setMaster(newData);
+        }
       }
     } catch (e) {
       console.warn("Error fetching data for module:", id, e);
@@ -1008,6 +1032,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       initialData = { ID_KATEGORI: defaultKategoriId };
     } else if (tab === 'varian') {
       initialData = { STATUS: 'Tersedia', ID_KATEGORI: defaultKategoriId, ID_MENU: defaultMenuId };
+    } else if (tab === 'promo') {
+      const defaultPromoId = generateClientIdForModule('promo');
+      initialData = { ID_PROMO: defaultPromoId, NAMA_PROMO: '', TIPE: 'DISKON_PERSEN', TARGET_ITEM: '', SYARAT_QTY: 1, NILAI_PROMO: 0 };
     } else {
       initialData = {};
     }
@@ -1212,6 +1239,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
         if (showModal === 'kategori') { sheetName = 'Master_Kategori'; idCol = 'ID_KATEGORI'; }
         if (showModal === 'menu') { sheetName = 'Master_Menu'; idCol = 'ID_MENU'; }
         if (showModal === 'varian') { sheetName = 'Master_Varian'; idCol = 'ID_VARIAN'; }
+        if (showModal === 'promo') { sheetName = 'Master_Promo'; idCol = 'ID_PROMO'; }
         
         if (isEditing) {
            await postUniversalDataToGAS("UPDATE_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
@@ -1237,6 +1265,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           if (showModal === 'varian') {
             const idx = newData.varian.findIndex((v:any) => v.ID_VARIAN === finalFormData.ID_VARIAN);
             if (idx >= 0) newData.varian[idx] = finalFormData as Varian; else newData.varian.push(finalFormData as Varian);
+          }
+          if (showModal === 'promo') {
+            if (!newData.promo) newData.promo = [];
+            const idx = newData.promo.findIndex((p:any) => p.ID_PROMO === finalFormData.ID_PROMO);
+            if (idx >= 0) newData.promo[idx] = finalFormData as Promo; else newData.promo.push(finalFormData as Promo);
           }
           await saveMasterData(newData);
           setMaster(newData);
@@ -1324,6 +1357,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       desc: 'Riwayat absensi dan izin pergantian shift',
       colorClass: 'bg-fuchsia-50 border border-fuchsia-100/80 hover:bg-fuchsia-100 text-fuchsia-950',
       iconColorClass: 'text-fuchsia-700 bg-fuchsia-100 group-hover:scale-110 group-hover:bg-fuchsia-500 group-hover:text-white',
+      borderColorClass: ''
+    },
+    { 
+      id: 'promo', 
+      label: 'Promo & Diskon', 
+      icon: <Tag className="w-6 h-6 sm:w-7 sm:h-7" />, 
+      desc: 'Kelola promosi, paket harga tetap, dan persen diskon',
+      colorClass: 'bg-rose-50 border border-rose-100/80 hover:bg-rose-100 text-rose-950',
+      iconColorClass: 'text-rose-700 bg-rose-100 group-hover:scale-110 group-hover:bg-rose-500 group-hover:text-white',
       borderColorClass: ''
     },
   ];
@@ -1506,6 +1548,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     return appliedAdminFilter.sortOrder === 'oldest' ? da - db : db - da;
   });
 
+  const filteredPromo = (master?.promo || []).filter(item => {
+    const query = searchQuery.toLowerCase();
+    return (
+      (item.NAMA_PROMO || '').toLowerCase().includes(query) ||
+      (item.ID_PROMO || '').toLowerCase().includes(query) ||
+      (item.TIPE || '').toLowerCase().includes(query) ||
+      (item.TARGET_ITEM || '').toLowerCase().includes(query)
+    );
+  });
+
   const activeFilterCount = (appliedAdminFilter.branch !== 'All' ? 1 : 0) + 
                             (appliedAdminFilter.category !== 'All' ? 1 : 0) +
                             (appliedAdminFilter.sortOrder !== 'newest' ? 1 : 0) +
@@ -1521,6 +1573,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   else if (activeModule === 'kategori') { filteredListLength = filteredKategori.length; originalListLength = master?.kategori?.length || 0; }
   else if (activeModule === 'menu') { filteredListLength = filteredMenu.length; originalListLength = master?.menu?.length || 0; }
   else if (activeModule === 'varian') { filteredListLength = filteredVarian.length; originalListLength = master?.varian?.length || 0; }
+  else if (activeModule === 'promo') { filteredListLength = filteredPromo.length; originalListLength = master?.promo?.length || 0; }
   else if (activeModule === 'inventaris') { filteredListLength = filteredInventaris.length; originalListLength = inventarisData.length; }
   else if (activeModule === 'shift') { filteredListLength = filteredShift.length; originalListLength = shiftData.length; }
 
@@ -1916,6 +1969,51 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                               </div>
                               <span className="text-xs sm:text-sm font-black text-red-850 self-center shrink-0 ml-2">
                                 Rp{Number(v.HARGA).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                          </div>
+                        </SelectableCard>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeModule === 'promo' && master && (
+                <div className="max-w-4xl mx-auto">
+                  {filteredPromo.length === 0 ? (
+                    <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+                      <Tag className="h-14 w-14 mb-4 opacity-70 text-rose-350 animate-pulse" />
+                      <p className="text-sm font-black text-rose-700 uppercase tracking-widest">Promo Kosong</p>
+                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada promo aktif atau diskon khusus terdaftar untuk menu Anda.</p>
+                    </div>
+                  ) : (
+                    <div className="grid gap-3.5">
+                      {filteredPromo.map((p, i) => (
+                        <SelectableCard key={i} item={p}>
+                          <div className="h-11 w-11 rounded-full bg-rose-50 text-rose-700 flex items-center justify-center shrink-0">
+                            <Tag className="h-5.5 w-5.5" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none">
+                                {p.NAMA_PROMO}
+                              </h5>
+                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
+                                ID: {p.ID_PROMO}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between mt-1.5">
+                              <div className="text-[11px] text-zinc-550 font-semibold truncate flex flex-col gap-1 items-start min-w-0">
+                                <span className="truncate"><b>Tipe:</b> {p.TIPE === 'DISKON_PERSEN' ? 'Diskon Persentase %' : 'Paket Harga Tetap'}</span>
+                                <span className="truncate"><b>Syarat Qty:</b> {p.SYARAT_QTY} item</span>
+                                <span className="font-medium text-zinc-450 mt-1 flex gap-1 items-baseline flex-wrap">
+                                  <b className="text-zinc-500 font-extrabold shrink-0">Varian:</b> 
+                                  <span className="font-bold underline text-red-650">{p.TARGET_ITEM ? p.TARGET_ITEM.split('|').map(getVariantDisplayLabel).join(', ') : '-'}</span>
+                                </span>
+                              </div>
+                              <span className="text-xs sm:text-sm font-black text-rose-750 self-end shrink-0 ml-2">
+                                {p.TIPE === 'DISKON_PERSEN' ? `${p.NILAI_PROMO}%` : `Rp${Number(p.NILAI_PROMO).toLocaleString('id-ID')}`}
                               </span>
                             </div>
                           </div>
@@ -2474,6 +2572,157 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           <option value="Tersedia">Tersedia</option>
                           <option value="Tidak Tersedia">Tidak Tersedia</option>
                         </select>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* MASTER PROMO FORM */}
+                {showModal === 'promo' && (
+                  <>
+                    {getIsEditing() && (
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Promo</label>
+                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
+                          {formData.ID_PROMO}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Promo</label>
+                      <input 
+                        type="text" 
+                        placeholder="Promo Pembelian Pizza" 
+                        value={formData.NAMA_PROMO || ''} 
+                        required 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        onChange={e => setFormData({...formData, NAMA_PROMO: e.target.value})}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tipe Promo</label>
+                        <select 
+                          required 
+                          value={formData.TIPE || 'DISKON_PERSEN'} 
+                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                          onChange={e => setFormData({...formData, TIPE: e.target.value})}
+                        >
+                          <option value="DISKON_PERSEN">Diskon Persentase (%)</option>
+                          <option value="HARGA_FIX">Harga Tetap Paket (Rupiah)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Syarat Qty Minimal</label>
+                        <input 
+                          type="number" 
+                          min="1" 
+                          placeholder="2" 
+                          value={formData.SYARAT_QTY || ''} 
+                          required 
+                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                          onChange={e => setFormData({...formData, SYARAT_QTY: parseInt(e.target.value) || 0})}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-550 mb-1">
+                        {formData.TIPE === 'HARGA_FIX' ? 'Nilai Harga Tetap (Rupiah)' : 'Nilai Persentase Diskon (%)'}
+                      </label>
+                      <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
+                        {formData.TIPE === 'HARGA_FIX' && (
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
+                          </div>
+                        )}
+                        <input 
+                          type="number" 
+                          min="1" 
+                          placeholder={formData.TIPE === 'HARGA_FIX' ? '15000' : '10'} 
+                          value={formData.NILAI_PROMO || ''} 
+                          required 
+                          className={`w-full ${formData.TIPE === 'HARGA_FIX' ? 'pl-9' : 'pl-3'} pr-8 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none`} 
+                          onChange={e => setFormData({...formData, NILAI_PROMO: parseFloat(e.target.value) || 0})}
+                        />
+                        {formData.TIPE !== 'HARGA_FIX' && (
+                          <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                            <span className="text-zinc-500 font-extrabold text-sm">%</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Pilih Varian Terkait (Nama Menu (Varian))</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Search className="h-4 w-4 text-zinc-400" />
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Ketik Nama Menu atau Nama Varian..." 
+                          value={promoVariantSearch} 
+                          className="w-full pl-9 pr-3 py-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none"
+                          onChange={e => setPromoVariantSearch(e.target.value)}
+                        />
+                        
+                        {/* Dropdown Options matching "Nama Menu (Varian)" */}
+                        {((master?.varian || []).map(v => {
+                          const m = master?.menu?.find(x => String(x.ID_MENU) === String(v.ID_MENU));
+                          const label = m ? `${m.NAMA_MENU} (${v.NAMA_VARIAN})` : v.NAMA_VARIAN;
+                          return { id: v.ID_VARIAN, label };
+                        }).filter(item => {
+                          if (!promoVariantSearch.trim()) return false;
+                          return item.label.toLowerCase().includes(promoVariantSearch.toLowerCase());
+                        })).length > 0 && (
+                          <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg z-50">
+                            {((master?.varian || []).map(v => {
+                              const m = master?.menu?.find(x => String(x.ID_MENU) === String(v.ID_MENU));
+                              const label = m ? `${m.NAMA_MENU} (${v.NAMA_VARIAN})` : v.NAMA_VARIAN;
+                              return { id: v.ID_VARIAN, label };
+                            }).filter(item => {
+                              if (!promoVariantSearch.trim()) return false;
+                              return item.label.toLowerCase().includes(promoVariantSearch.toLowerCase());
+                            })).map(item => (
+                              <div 
+                                key={item.id}
+                                className="p-3 text-xs font-bold text-zinc-800 hover:bg-neutral-50 cursor-pointer flex justify-between items-center border-b border-zinc-100 last:border-0"
+                                onClick={() => {
+                                  const currentTargets = formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean) : [];
+                                  if (!currentTargets.includes(item.id)) {
+                                    const newTargets = [...currentTargets, item.id].join('|');
+                                    setFormData({ ...formData, TARGET_ITEM: newTargets });
+                                  }
+                                  setPromoVariantSearch('');
+                                }}
+                              >
+                                <span>{item.label}</span>
+                                <Plus className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Variants Selected Chips */}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean).map(id => (
+                          <div key={id} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-100 border border-neutral-200 hover:bg-neutral-200 rounded-full text-xs font-bold text-zinc-800 transition">
+                            <span>{getVariantDisplayLabel(id)}</span>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                const currentTargets = formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean) : [];
+                                const newTargets = currentTargets.filter(item => item !== id).join('|');
+                                setFormData({ ...formData, TARGET_ITEM: newTargets });
+                              }}
+                              className="p-0.5 rounded-full hover:bg-neutral-200 text-zinc-555 hover:text-zinc-850 transition cursor-pointer"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )) : (
+                          <p className="text-[10px] font-bold text-zinc-400 italic">Belum ada varian yang dipilih.</p>
+                        )}
                       </div>
                     </div>
                   </>

@@ -92,7 +92,47 @@ function formatDateToDMY(date: Date | null, fallback: string): string {
   return `${day}/${month}/${year}`;
 }
 
+interface MenuAgg {
+  namaMenu: string;
+  totalQty: number;
+  variants: { [namaVarian: string]: number };
+}
+
+function getMenuAggregates(txs: Transaction[]): MenuAgg[] {
+  const menuMap: { [namaMenu: string]: MenuAgg } = {};
+
+  txs.forEach(tx => {
+    if (tx.detail && Array.isArray(tx.detail)) {
+      tx.detail.forEach(item => {
+        const nm = item.NAMA_MENU || 'Unknown';
+        const v = item.VARIAN || '';
+        const qty = Number(item.QTY || 0);
+
+        if (!menuMap[nm]) {
+          menuMap[nm] = {
+            namaMenu: nm,
+            totalQty: 0,
+            variants: {}
+          };
+        }
+
+        menuMap[nm].totalQty += qty;
+        
+        if (v) {
+          if (!menuMap[nm].variants[v]) {
+            menuMap[nm].variants[v] = 0;
+          }
+          menuMap[nm].variants[v] += qty;
+        }
+      });
+    }
+  });
+
+  return Object.values(menuMap).sort((a, b) => b.totalQty - a.totalQty);
+}
+
 export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelProps) {
+
   const session = getSessionCache();
 
   // Filters initialized from session memory OR persistence OR default
@@ -139,6 +179,75 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   
   const [loadingBukuKas, setLoadingBukuKas] = useState<boolean>(false);
   const [bukuKasError, setBukuKasError] = useState<string | null>(null);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    getTransactions().then(txs => {
+      if (active) {
+        setAllTransactions(txs);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [bukuKasData]);
+
+  const filteredPOSTransactions = useMemo(() => {
+    return allTransactions.filter(tx => {
+      // 1. Branch Filter
+      const targetBranch = activeBranch === 'ADMIN' ? filterCabang : (activeBranch || 'ALL');
+      if (targetBranch !== 'ALL' && String(tx.cabang) !== String(targetBranch)) {
+        return false;
+      }
+
+      // 2. Date/Period Filter
+      if (!tx.timestamp) return false;
+      const txDate = new Date(tx.timestamp);
+      if (isNaN(txDate.getTime())) return false;
+
+      const yr = txDate.getFullYear();
+      const mo = txDate.getMonth(); // 0-11
+      const dy = txDate.getDate();
+
+      if (filterPeriode === 'HARIAN') {
+        const parts = selectedDate.split('-'); // YYYY-MM-DD
+        if (parts.length === 3) {
+          const targetY = parseInt(parts[0], 10);
+          const targetM = parseInt(parts[1], 10) - 1; // 0-11
+          const targetD = parseInt(parts[2], 10);
+          return yr === targetY && mo === targetM && dy === targetD;
+        }
+        return false;
+      }
+
+      if (filterPeriode === 'BULANAN') {
+        return mo === selectedMonth && yr === selectedYear;
+      }
+
+      if (filterPeriode === 'KUARTAL') {
+        const targetQ = Math.ceil((selectedMonth + 1) / 3);
+        const txQ = Math.ceil((mo + 1) / 3);
+        return yr === selectedYear && txQ === targetQ;
+      }
+
+      if (filterPeriode === 'SEMESTER') {
+        const targetS = (selectedMonth + 1) <= 6 ? 1 : 2;
+        const txS = (mo + 1) <= 6 ? 1 : 2;
+        return yr === selectedYear && txS === targetS;
+      }
+
+      if (filterPeriode === 'TAHUNAN') {
+        return yr === selectedYear;
+      }
+
+      return true;
+    });
+  }, [allTransactions, activeBranch, filterCabang, filterPeriode, selectedDate, selectedMonth, selectedYear]);
+
+  const rincianPesanan = useMemo(() => {
+    return getMenuAggregates(filteredPOSTransactions);
+  }, [filteredPOSTransactions]);
 
   // Toast notifications for file actions (share, copy, pdf)
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -811,6 +920,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           )}
         </div>
       </div>
+
 
       </div>
 
