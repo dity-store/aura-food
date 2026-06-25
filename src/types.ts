@@ -3,6 +3,8 @@ export interface Cabang {
   NAMA_CABANG: string;
   PASSWORD?: string;
   LOKASI?: string;
+  KONTAK?: string;
+  STATUS?: string;
 }
 
 export interface Kategori {
@@ -54,6 +56,14 @@ export interface MasterData {
   varian: Varian[];
   promo?: Promo[];
   katalogLengkap?: NestedKategori[];
+  pegawai?: Pegawai[];
+}
+
+export interface Pegawai {
+  ID_PEGAWAI: string;
+  ID_CABANG: string;
+  NAMA_PEGAWAI: string;
+  KONTAK?: string;
 }
 
 export interface Pesanan {

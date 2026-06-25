@@ -1,7 +1,7 @@
 import { Transaction, SyncQueueItem, Cabang, Kategori, Menu, Varian, MasterData, GASConfig } from '../types';
 
 const DB_NAME = 'Sistem Keuangan Aura Food'; // Update db name to start fresh
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export function initDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -19,6 +19,7 @@ export function initDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('menu')) db.createObjectStore('menu', { keyPath: 'ID_MENU' });
       if (!db.objectStoreNames.contains('varian')) db.createObjectStore('varian', { keyPath: 'ID_VARIAN' });
       if (!db.objectStoreNames.contains('promo')) db.createObjectStore('promo', { keyPath: 'ID_PROMO' });
+      if (!db.objectStoreNames.contains('pegawai')) db.createObjectStore('pegawai', { keyPath: 'ID_PEGAWAI' });
 
       // Transactions & sync
       if (!db.objectStoreNames.contains('transactions')) db.createObjectStore('transactions', { keyPath: 'id' });
@@ -32,11 +33,11 @@ export function initDB(): Promise<IDBDatabase> {
 export async function saveMasterData(data: MasterData): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo'], 'readwrite');
+    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo', 'pegawai'], 'readwrite');
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
 
-    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo'];
+    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo', 'pegawai'];
     for (const name of storeNames) {
       if (!data[name]) continue;
       const store = tx.objectStore(name as string);
@@ -49,11 +50,11 @@ export async function saveMasterData(data: MasterData): Promise<void> {
 export async function getMasterData(): Promise<MasterData> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo'], 'readonly');
-    const data: MasterData = { cabang: [], kategori: [], menu: [], varian: [], promo: [] };
+    const tx = db.transaction(['cabang', 'kategori', 'menu', 'varian', 'promo', 'pegawai'], 'readonly');
+    const data: MasterData = { cabang: [], kategori: [], menu: [], varian: [], promo: [], pegawai: [] };
     let completed = 0;
 
-    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo'];
+    const storeNames: (keyof MasterData)[] = ['cabang', 'kategori', 'menu', 'varian', 'promo', 'pegawai'];
     for (const name of storeNames) {
       const req = tx.objectStore(name as string).getAll();
       req.onsuccess = () => {
@@ -136,13 +137,14 @@ export async function syncMasterDataFromGAS(): Promise<void> {
     if (resFull.ok) {
       const fullResult = await resFull.json();
       const data = fullResult.data || fullResult;
-      if (data && (data.cabang || data.kategori || data.menu || data.varian || data.promo)) {
+      if (data && (data.cabang || data.kategori || data.menu || data.varian || data.promo || data.pegawai)) {
         const dbData: MasterData = {
           cabang: data.cabang || [],
           kategori: data.kategori || [],
           menu: data.menu || [],
           varian: data.varian || [],
-          promo: data.promo || []
+          promo: data.promo || [],
+          pegawai: data.pegawai || []
         };
         await saveMasterData(dbData);
         console.log("Master data lengkap berhasil disinkronisasi.");
@@ -259,6 +261,49 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   recentTransactions: Transaction[];
   yesterdayRevenue: number;
 }> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
+
+  try {
+    const res = await fetch(config.webAppUrl, {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: 'GET_ADMIN_DASHBOARD',
+        id_cabang: idCabang,
+        selected_date: selectedDateStr
+      }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+    });
+
+    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+    const result = await res.json();
+    if (result.status === 'success') {
+      const data = result.data;
+      return {
+        totalRevenue: Number(data.totalRevenue || 0),
+        totalTransactions: Number(data.totalTransactions || 0),
+        totalCash: Number(data.totalCash || 0),
+        totalTransfer: Number(data.totalTransfer || 0),
+        averageTransactionValue: Number(data.averageTransactionValue || (data.totalTransactions ? data.totalRevenue / data.totalTransactions : 0)),
+        categorySales: data.categorySales || { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 },
+        recentTransactions: (data.recentTransactions || []).map((p: any) => ({
+          id: p.ID_PESANAN || p[0],
+          pesanan: p,
+          detail: p.detail || [],
+          status: 'synced' as 'synced',
+          timestamp: p.TANGGAL_WAKTU || p[1],
+          paymentMethod: p.METODE_BAYAR || p[4],
+          totalAmount: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
+          cabang: p.ID_CABANG || p[2]
+        })),
+        yesterdayRevenue: Number(data.yesterdayRevenue || 0)
+      };
+    }
+  } catch (err) {
+    console.warn("Server-side dashboard metrics failed, falling back to client-side", err);
+  }
+
+  // FALLBACK CLIENT-SIDE (Existing logic)
   const pesanan = await fetchUniversalDataFromGAS('Data_Pesanan');
   const details = await fetchUniversalDataFromGAS('Detail_Pesanan');
   
@@ -271,22 +316,15 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
       return `${yr}-${mo}-${dy}`;
     }
     const str = String(dStr).trim();
-    if (str.includes('T')) {
-      return str.split('T')[0];
-    }
+    if (str.includes('T')) return str.split('T')[0];
     if (str.includes('/')) {
       const parts = str.split(' ')[0].split('/');
-      if (parts.length === 3) {
-        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-      }
+      if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
     } else if (str.includes('-')) {
       const datePart = str.split(' ')[0];
       const parts = datePart.split('-');
-      if (parts.length === 3 && parts[0].length === 4) {
-        return datePart;
-      }
+      if (parts.length === 3 && parts[0].length === 4) return datePart;
     }
-    
     try {
       const d = new Date(dStr);
       if (!isNaN(d.getTime())) {
@@ -319,22 +357,16 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   
   let totalCash = 0;
   let totalTransfer = 0;
-  
   validPesanan.forEach(p => {
     const isCompliment = String(p.JENIS_PESANAN || p[5] || '').toUpperCase() === 'COMPLIMENT';
     if (isCompliment) return;
-    
     const method = String(p.METODE_BAYAR || p[4] || '').toUpperCase();
     const amount = Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
-    if (method === 'CASH' || method === 'TUNAI') {
-      totalCash += amount;
-    } else {
-      totalTransfer += amount;
-    }
+    if (method === 'CASH' || method === 'TUNAI') totalCash += amount;
+    else totalTransfer += amount;
   });
 
   const averageTransactionValue = totalTransactions ? totalRevenue / totalTransactions : 0;
-  
   const validPesananIds = new Set(validPesanan.map(p => String(p.ID_PESANAN || p[0])));
 
   let yesterdayRevenue = 0;
@@ -342,34 +374,24 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
     try {
       const currentDate = new Date(selectedDateStr);
       currentDate.setDate(currentDate.getDate() - 1);
-      const yr = currentDate.getFullYear();
-      const mo = String(currentDate.getMonth() + 1).padStart(2, '0');
-      const dy = String(currentDate.getDate()).padStart(2, '0');
-      const yesterdayDateStr = `${yr}-${mo}-${dy}`;
-      
+      const yesterdayDateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
       const yesterdayPesanan = pesanan.filter(p => {
         const pIdCabang = String(p.ID_CABANG || p[2] || '').trim();
         if (idCabang !== 'All' && pIdCabang !== String(idCabang).trim()) return false;
         const pDate = p.TANGGAL_WAKTU || p[1];
-        if (!pDate) return false;
-        if (getLocalDateString(pDate) !== yesterdayDateStr) return false;
-        return true;
+        return pDate && getLocalDateString(pDate) === yesterdayDateStr;
       });
       yesterdayRevenue = yesterdayPesanan.reduce((sum, p) => {
         const isCompliment = String(p.JENIS_PESANAN || p[5] || '').toUpperCase() === 'COMPLIMENT';
-        if (isCompliment) return sum;
-        return sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
+        return isCompliment ? sum : sum + Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0);
       }, 0);
-    } catch (e) {
-      console.error("Error calculating yesterday revenue:", e);
-    }
+    } catch {}
   }
 
   const categorySales = { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 };
   details.forEach(d => {
     const dPesananId = String(d.ID_PESANAN || d[1] || d[0]);
     if (selectedDateStr && !validPesananIds.has(dPesananId)) return;
-
     const nm = String(d.NAMA_MENU || d[2] || '').toLowerCase();
     const qty = Number(d.QTY || d.JUMLAH || d.Jumlah || d[5] || d[4] || 0);
     if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) categorySales.Pasta += qty;
@@ -378,11 +400,8 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
     else categorySales.Makanan += qty;
   });
 
-  // Most recent first
   validPesanan.sort((a, b) => new Date(b.TANGGAL_WAKTU || b[1] || 0).getTime() - new Date(a.TANGGAL_WAKTU || a[1] || 0).getTime());
-  const recentRaw = validPesanan.slice(0, 50); // limit 50
-  
-  const recentTransactionsMapped = recentRaw.map(p => ({
+  const recentTransactionsMapped = validPesanan.slice(0, 50).map(p => ({
     id: p.ID_PESANAN || p[0],
     pesanan: {
       ID_PESANAN: p.ID_PESANAN || p[0],
@@ -401,16 +420,7 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
     cabang: p.ID_CABANG || p[2]
   }));
 
-  return {
-    totalRevenue,
-    totalTransactions,
-    totalCash,
-    totalTransfer,
-    averageTransactionValue,
-    categorySales,
-    recentTransactions: recentTransactionsMapped,
-    yesterdayRevenue
-  };
+  return { totalRevenue, totalTransactions, totalCash, totalTransfer, averageTransactionValue, categorySales, recentTransactions: recentTransactionsMapped, yesterdayRevenue };
 }
 
 export async function getAdminReportsData(
@@ -437,22 +447,24 @@ export async function getAdminReportsData(
   const config = getGASConfig();
   if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
   
-  const url = new URL(config.webAppUrl);
-  url.searchParams.append('action', 'get_admin_reports');
-  url.searchParams.append('id_cabang', idCabang);
-  url.searchParams.append('periode', periode);
-  url.searchParams.append('jenis_data', jenisData);
-  url.searchParams.append('tanggal', tanggal);
-  url.searchParams.append('bulan', bulan.toString());
-  url.searchParams.append('tahun', tahun.toString());
-  url.searchParams.append('kuartal', kuartal);
-  url.searchParams.append('semester', semester);
-  url.searchParams.append('_timestamp', Date.now().toString());
-
   try {
-    const res = await fetch(url.toString(), { redirect: 'follow' });
-    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+    const res = await fetch(config.webAppUrl, {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: 'GET_ADMIN_REPORTS',
+        id_cabang: idCabang,
+        periode,
+        jenis_data: jenisData,
+        tanggal,
+        bulan,
+        tahun,
+        kuartal,
+        semester
+      }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+    });
     
+    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
     const result = await res.json();
     if (result.status !== 'success') throw new Error(result.message || 'Gagal mengambil data laporan.');
     
@@ -768,6 +780,55 @@ export function markTransactionAsPrinted(id: string): void {
     }
   } catch (e) {
     console.error(e);
+  }
+}
+
+export async function uploadBukuKasFotoToGAS(base64Data: string, filename: string, mimeType: string): Promise<string> {
+  const config = getGASConfig();
+  if (!config || !config.webAppUrl) throw new Error('Konfigurasi GAS belum diatur.');
+  
+  // Sanitize filename to prevent issues in GAS
+  const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  
+  // Clean base64Data: remove newlines/whitespace
+  const cleanedBase64Data = base64Data.replace(/\s/g, '');
+  
+  console.log("Uploading photo:", sanitizedFilename, mimeType, "Size (base64):", cleanedBase64Data.length);
+
+  try {
+    const res = await fetch(config.webAppUrl, {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: 'UPLOAD_BUKTI_KAS',
+        base64Data: cleanedBase64Data,
+        filename: sanitizedFilename,
+        mimeType
+      }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+    });
+    
+    const textRes = await res.text();
+    let result;
+    try {
+        result = JSON.parse(textRes);
+    } catch (e) {
+        console.error("Failed to parse response as JSON:", textRes);
+        throw new Error("Invalid response from server (not JSON)");
+    }
+    
+    if (!res.ok) {
+        console.error("Upload response not ok:", res.status, res.statusText, result);
+        throw new Error(result.message || `Upload failed with status ${res.status}`);
+    }
+
+    if (result.status !== 'success') {
+      console.error("GAS upload error:", result.message);
+      throw new Error(result.message || 'Gagal mengupload foto bukti');
+    }
+    return result.downloadUrl || result.url || '';
+  } catch (err: any) {
+    console.error("Caught error in uploadBukuKasFotoToGAS:", err);
+    throw err;
   }
 }
 

@@ -8,6 +8,7 @@ import {
   Plus,
   X,
   MapPin,
+  Camera,
   Settings,
   RefreshCw,
   Briefcase,
@@ -25,9 +26,12 @@ import {
   Eye,
   EyeOff,
   AlertTriangle,
-  AlertCircle
+  AlertCircle,
+  Users,
+  ClipboardList
 } from 'lucide-react';
-import { getMasterData, saveMasterData, syncMasterDataFromGAS, postUniversalDataToGAS, fetchUniversalDataFromGAS } from '../utils/db';
+import { getMasterData, saveMasterData, syncMasterDataFromGAS, postUniversalDataToGAS, fetchUniversalDataFromGAS, uploadBukuKasFotoToGAS } from '../utils/db';
+import { CustomSelect } from './CustomSelect';
 import { MasterData, Cabang, Kategori, Menu, Varian, Promo } from '../types';
 import { getSessionCache } from '../utils/sessionCache';
 
@@ -44,11 +48,13 @@ const SelectionContext = React.createContext<SelectionContextType | null>(null);
 interface SelectableCardProps {
   item: any;
   children: React.ReactNode;
+  className?: string;
 }
 
 const SelectableCard: React.FC<SelectableCardProps> = ({ 
   item, 
-  children 
+  children,
+  className = "" 
 }) => {
   const context = React.useContext(SelectionContext);
   if (!context) {
@@ -219,7 +225,7 @@ const SelectableCard: React.FC<SelectableCardProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
-      className={`selectable-card-class bg-white rounded-[24px] border shadow-sm p-4.5 flex items-center gap-3.5 transition duration-200 text-left active:scale-[0.98] cursor-pointer touch-manipulation select-none relative overflow-hidden ${isSelected ? 'border-red-500 bg-red-50/10 ring-2 ring-red-600 ring-offset-2' : 'border-zinc-200/90 hover:border-zinc-300'}`}
+      className={`selectable-card-class bg-white rounded-[24px] border shadow-sm p-4.5 flex items-center gap-3.5 transition duration-200 text-left active:scale-[0.98] cursor-pointer touch-manipulation select-none relative overflow-hidden ${isSelected ? 'border-red-500 bg-red-50/10 ring-2 ring-red-600 ring-offset-2' : 'border-zinc-200/90 hover:border-zinc-300'} ${className}`}
     >
       {isSelected && (
         <div className="absolute inset-0 bg-red-600/5 pointer-events-none" />
@@ -235,14 +241,50 @@ const SelectableCard: React.FC<SelectableCardProps> = ({
 interface AdminPanelProps {
   onRefreshPOSCatalog: () => void;
   onModuleActiveChange?: (isActive: boolean) => void;
+  onOpenRekapOperasional?: () => void;
 }
 
-type TabType = 'kas' | 'cabang' | 'kategori' | 'menu' | 'varian' | 'inventaris' | 'shift' | 'promo';
+type TabType = 'kas' | 'cabang' | 'kategori' | 'menu' | 'varian' | 'inventaris' | 'shift' | 'promo' | 'pegawai' | 'rekap_operasional';
 
-export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }: AdminPanelProps) {
+export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, onOpenRekapOperasional }: AdminPanelProps) {
   const [activeModule, setActiveModule] = useState<TabType | null>(null);
   const [showModal, setShowModal] = useState<TabType | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedPhotoFile, setSelectedPhotoFile] = useState<{ base64: string, preview: string, name: string, mimeType: string } | null>(null);
+  const [photoError, setPhotoError] = useState<string>('');
+
+  const handlePhotoSelect = (file: File) => {
+    setPhotoError('');
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('Hanya file foto/gambar saja yang diperbolehkan (JPG, PNG, dll).');
+      return;
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError('Ukuran file foto maksimal adalah 5MB.');
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64String = e.target?.result as string;
+      if (base64String) {
+        const base64DataOnly = base64String.split(',')[1] || base64String;
+        setSelectedPhotoFile({
+          base64: base64DataOnly,
+          preview: base64String,
+          name: file.name,
+          mimeType: file.type
+        });
+      }
+    };
+    reader.onerror = () => {
+      setPhotoError('Gagal membaca file foto.');
+    };
+    reader.readAsDataURL(file);
+  };
   
   // Selection mode state (WhatsApp style)
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -273,7 +315,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     statusFilter: 'All'
   });
   const [appliedAdminFilter, setAppliedAdminFilter] = useState<AdminFilterState>(getDefaultAdminFilterState());
-  const [tempAdminFilter, setTempAdminFilter] = useState<AdminFilterState>(getDefaultAdminFilterState());  
+  const [tempAdminFilter, setTempAdminFilter] = useState<AdminFilterState>(getDefaultAdminFilterState());
+  const [showKasSuggestions, setShowKasSuggestions] = useState<boolean>(false);  
   
   // Pull to Refresh state
   const [pullDistance, setPullDistance] = useState(0);
@@ -290,6 +333,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   // Back button interception for Android
   // Basic Form States
   const [formData, setFormData] = useState<any>({ STATUS: 'Tersedia' });
+  const [showKeteranganSuggestions, setShowKeteranganSuggestions] = useState(false);
   const [promoVariantSearch, setPromoVariantSearch] = useState('');
 
   const getVariantDisplayLabel = (variantId: string): string => {
@@ -316,6 +360,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           setFormData({});
           setOriginalEditData(null);
           setInitialFormData(null);
+          setSelectedPhotoFile(null);
+          setPhotoError('');
         }
       });
     } else {
@@ -323,6 +369,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       setFormData({});
       setOriginalEditData(null);
       setInitialFormData(null);
+      setSelectedPhotoFile(null);
+      setPhotoError('');
     }
   };
   const [showPassword, setShowPassword] = useState(false);
@@ -409,6 +457,13 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       String(c.NAMA_CABANG).trim().toLowerCase() === targetId
     );
     return found ? found.NAMA_CABANG : (cabangId || defaultName);
+  };
+
+  const getPegawaiName = (pegawaiId: any) => {
+    if (!master?.pegawai || !pegawaiId) return pegawaiId || '-';
+    const targetId = String(pegawaiId).trim().toLowerCase();
+    const found = master.pegawai.find((p: any) => String(p.ID_PEGAWAI).trim().toLowerCase() === targetId);
+    return found ? found.NAMA_PEGAWAI : pegawaiId;
   };
 
   const getKategoriName = (kategoriId: any) => {
@@ -526,6 +581,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     if (module === 'promo') {
       return generateClientSideId('PRM-', master?.promo || [], 'ID_PROMO');
     }
+    if (module === 'pegawai') {
+      return generateClientSideId('PGW-', master?.pegawai || [], 'ID_PEGAWAI');
+    }
     return '';
   };
 
@@ -540,8 +598,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       const cab = formData.cabang || formData.CABANG || formData.ID_CABANG;
       const jen = formData.jenis || formData.JENIS;
       const ket = formData.keterangan || formData.KETERANGAN;
-      const nom = Number(formData.nominal || formData.DEBIT || formData.KREDIT || 0);
-      return !!cab && !!jen && !!String(ket).trim() && nom > 0;
+      const debit = Number(formData.nominal || formData.DEBIT || 0);
+      const kredit = Number(formData.KREDIT || 0);
+      const isValidNominal = (debit > 0 || kredit > 0);
+      return !!cab && !!jen && !!String(ket).trim() && isValidNominal;
     }
     
     if (showModal === 'inventaris') {
@@ -593,6 +653,12 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       const nilai = Number(formData.NILAI_PROMO || 0);
       return !!String(nama).trim() && !!tipe && !!String(targetItem).trim() && nilai > 0;
     }
+
+    if (showModal === 'pegawai') {
+      const cab = formData.ID_CABANG;
+      const nm = formData.NAMA_PEGAWAI;
+      return !!cab && !!String(nm).trim();
+    }
     
     return false;
   };
@@ -622,6 +688,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       keysToCheck = ['ID_KATEGORI', 'ID_MENU', 'NAMA_VARIAN', 'HARGA', 'STATUS'];
     } else if (showModal === 'promo') {
       keysToCheck = ['NAMA_PROMO', 'TIPE', 'TARGET_ITEM', 'SYARAT_QTY', 'NILAI_PROMO'];
+    } else if (showModal === 'pegawai') {
+      keysToCheck = ['ID_PEGAWAI', 'ID_CABANG', 'NAMA_PEGAWAI', 'KONTAK'];
     }
     
     for (const key of keysToCheck) {
@@ -863,6 +931,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       } else if (activeModule === 'promo') {
         sheetName = 'Master_Promo';
         idCol = 'ID_PROMO';
+      } else if (activeModule === 'pegawai') {
+        sheetName = 'Master_Pegawai';
+        idCol = 'ID_PEGAWAI';
       }
 
       if (sheetName && idCol) {
@@ -909,6 +980,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           newData.varian = newData.varian.filter((v: any) => !selectedIds.includes(v.ID_VARIAN) && !selectedIds.includes(v.NAMA_VARIAN));
         } else if (activeModule === 'promo') {
           newData.promo = (newData.promo || []).filter((p: any) => !selectedIds.includes(p.ID_PROMO) && !selectedIds.includes(p.NAMA_PROMO));
+        } else if (activeModule === 'pegawai') {
+          newData.pegawai = (newData.pegawai || []).filter((p: any) => !selectedIds.includes(p.ID_PEGAWAI) && !selectedIds.includes(p.NAMA_PEGAWAI));
         }
         await saveMasterData(newData);
         setMaster(newData);
@@ -948,6 +1021,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       formattedItem.TRANSFER = parsed.transfer;
       formattedItem.compliment = parsed.compliment;
       formattedItem.COMPLIMENT = parsed.compliment;
+      formattedItem.foto = parsed.foto;
+      formattedItem.FOTO = parsed.foto;
+      formattedItem.bukti = parsed.foto;
     }
 
     // Track original properties for cascade update checks
@@ -1088,6 +1164,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           finalFormData.ID_LOG = generateClientIdForModule('inventaris');
         } else if (showModal === 'shift') {
           finalFormData.ID_IZIN = generateClientIdForModule('shift');
+        } else if (showModal === 'pegawai') {
+          finalFormData.ID_PEGAWAI = generateClientIdForModule('pegawai');
         }
       }
 
@@ -1129,6 +1207,17 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           derivedTipe = 'Keluar';
         }
 
+        // Handle photo upload if present
+        let finalFotoUrl = finalFormData.foto || finalFormData.FOTO || finalFormData.bukti || finalFormData.BUKTI || '';
+        if (selectedPhotoFile) {
+          try {
+            finalFotoUrl = await uploadBukuKasFotoToGAS(selectedPhotoFile.base64, selectedPhotoFile.name, selectedPhotoFile.mimeType);
+          } catch (uploadErr: any) {
+            console.error("Gagal mengupload foto:", uploadErr);
+            throw new Error("Gagal mengupload foto bukti nota: " + (uploadErr.message || "Koneksi terputus"));
+          }
+        }
+
         const payload = {
           TANGGAL: finalFormData.tanggal || finalFormData.TANGGAL || new Date().toISOString(),
           ID_CABANG: finalFormData.cabang || finalFormData.CABANG || finalFormData.ID_CABANG || defaultCabId,
@@ -1141,7 +1230,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           KREDIT: derivedTipe === 'Keluar' ? Number(finalFormData.nominal || 0) : 0,
           CASH: Number(finalFormData.cash || 0),
           TRANSFER: Number(finalFormData.transfer || 0),
-          COMPLIMENT: Number(finalFormData.compliment || 0)
+          COMPLIMENT: Number(finalFormData.compliment || 0),
+          FOTO: finalFotoUrl,
+          foto: finalFotoUrl,
+          BUKTI: finalFotoUrl,
+          bukti: finalFotoUrl
         };
 
         if (isEditing && finalFormData._id_or_original) {
@@ -1170,6 +1263,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           TRANSFER: payload.TRANSFER,
           compliment: payload.COMPLIMENT,
           COMPLIMENT: payload.COMPLIMENT,
+          foto: payload.FOTO,
+          FOTO: payload.FOTO,
+          bukti: payload.FOTO,
           _original: {
             ...payload,
             _id_or_original: finalFormData._id_or_original
@@ -1260,6 +1356,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
         if (showModal === 'menu') { sheetName = 'Master_Menu'; idCol = 'ID_MENU'; }
         if (showModal === 'varian') { sheetName = 'Master_Varian'; idCol = 'ID_VARIAN'; }
         if (showModal === 'promo') { sheetName = 'Master_Promo'; idCol = 'ID_PROMO'; }
+        if (showModal === 'pegawai') { sheetName = 'Master_Pegawai'; idCol = 'ID_PEGAWAI'; }
         
         if (isEditing) {
            await postUniversalDataToGAS("UPDATE_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
@@ -1291,6 +1388,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
             const idx = newData.promo.findIndex((p:any) => p.ID_PROMO === finalFormData.ID_PROMO);
             if (idx >= 0) newData.promo[idx] = finalFormData as Promo; else newData.promo.push(finalFormData as Promo);
           }
+          if (showModal === 'pegawai') {
+            if (!newData.pegawai) newData.pegawai = [];
+            const idx = newData.pegawai.findIndex((p:any) => p.ID_PEGAWAI === finalFormData.ID_PEGAWAI);
+            if (idx >= 0) newData.pegawai[idx] = finalFormData as any; else newData.pegawai.push(finalFormData as any);
+          }
           await saveMasterData(newData);
           setMaster(newData);
           onRefreshPOSCatalog();
@@ -1315,6 +1417,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     colorClass: string; 
     iconColorClass: string; 
     borderColorClass: string;
+    onClick?: () => void;
   }[] = [
     { 
       id: 'kas', 
@@ -1326,12 +1429,22 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       borderColorClass: ''
     },
     { 
+      id: 'rekap_operasional', 
+      label: 'Operasional', 
+      icon: <ClipboardList className="w-6 h-6 sm:w-7 sm:h-7" />, 
+      desc: 'Lihat ringkasan operasional toko per hari',
+      colorClass: 'bg-amber-50 border border-amber-100/80 hover:bg-amber-100 text-amber-950',
+      iconColorClass: 'text-amber-700 bg-amber-100 group-hover:scale-110 group-hover:bg-amber-500 group-hover:text-white',
+      borderColorClass: '',
+      onClick: onOpenRekapOperasional
+    },
+    { 
       id: 'cabang', 
       label: 'Cabang', 
       icon: <Building className="w-6 h-6 sm:w-7 sm:h-7" />, 
       desc: 'Pengaturan data outlet / cabang Aura Food',
-      colorClass: 'bg-amber-50 border border-amber-100/80 hover:bg-amber-100 text-amber-950',
-      iconColorClass: 'text-amber-700 bg-amber-100 group-hover:scale-110 group-hover:bg-amber-500 group-hover:text-white',
+      colorClass: 'bg-blue-50 border border-blue-100/80 hover:bg-blue-100 text-blue-950',
+      iconColorClass: 'text-blue-700 bg-blue-100 group-hover:scale-110 group-hover:bg-blue-500 group-hover:text-white',
       borderColorClass: ''
     },
     { 
@@ -1388,6 +1501,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       iconColorClass: 'text-rose-700 bg-rose-100 group-hover:scale-110 group-hover:bg-rose-500 group-hover:text-white',
       borderColorClass: ''
     },
+    { 
+      id: 'pegawai', 
+      label: 'Staff Pegawai', 
+      icon: <Users className="w-6 h-6 sm:w-7 sm:h-7" />, 
+      desc: 'Kelola data master pegawai cabang Aura Food',
+      colorClass: 'bg-teal-50 border border-teal-100/80 hover:bg-teal-100 text-teal-950',
+      iconColorClass: 'text-teal-700 bg-teal-100 group-hover:scale-110 group-hover:bg-teal-500 group-hover:text-white',
+      borderColorClass: ''
+    },
   ];
 
   // Helper to parse any cash transaction format cleanly
@@ -1433,6 +1555,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     const compliment = Number(rawK.compliment || rawK.COMPLIMENT || rawK.total_compliment || rawK.TOTAL_COMPLIMENT || rawK.Total_Compliment || 0);
     const tipe = rawK.tipe || '';
     const isDebit = debit > 0 || String(tipe).toLowerCase() === 'masuk' || String(jenis).toLowerCase().includes('pemasukan') || String(jenis).toLowerCase().includes('usaha');
+    const foto = rawK.FOTO || rawK.foto || rawK.bukti || rawK.BUKTI || '';
     
     return {
       tanggal,
@@ -1447,6 +1570,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       compliment,
       isDebit,
       tipe,
+      foto,
       _original: rawK
     };
   };
@@ -1496,6 +1620,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       (item.LOKASI || '').toLowerCase().includes(query) ||
       (item.ID_CABANG || '').toLowerCase().includes(query)
     );
+  }).sort((a, b) => {
+    const aActive = String(a.STATUS || 'AKTIF').trim().toUpperCase() === 'AKTIF' ? 1 : 0;
+    const bActive = String(b.STATUS || 'AKTIF').trim().toUpperCase() === 'AKTIF' ? 1 : 0;
+    return bActive - aActive; // 1 (Active) comes before 0 (Inactive)
   });
 
   const filteredKategori = (master?.kategori || []).filter(item => {
@@ -1526,6 +1654,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       (item.ID_MENU || '').toLowerCase().includes(query) ||
       (item.STATUS || '').toLowerCase().includes(query)
     );
+  }).sort((a, b) => {
+    const aActive = (a.STATUS === 'Tersedia' || String(a.STATUS || '').trim().toUpperCase() === 'AKTIF') ? 1 : 0;
+    const bActive = (b.STATUS === 'Tersedia' || String(b.STATUS || '').trim().toUpperCase() === 'AKTIF') ? 1 : 0;
+    return bActive - aActive;
   });
 
   const filteredInventaris = (Array.isArray(inventarisData) ? inventarisData : []).filter(item => {
@@ -1584,6 +1716,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     );
   });
 
+  const filteredPegawai = (master?.pegawai || []).filter(item => {
+    if (appliedAdminFilter.branch !== 'All' && String(item.ID_CABANG) !== appliedAdminFilter.branch) return false;
+    const query = searchQuery.toLowerCase();
+    return (
+      (item.NAMA_PEGAWAI || '').toLowerCase().includes(query) ||
+      (item.ID_PEGAWAI || '').toLowerCase().includes(query) ||
+      (item.KONTAK || '').toLowerCase().includes(query)
+    );
+  });
+
   const activeFilterCount = (appliedAdminFilter.branch !== 'All' ? 1 : 0) + 
                             (appliedAdminFilter.category !== 'All' ? 1 : 0) +
                             (appliedAdminFilter.sortOrder !== 'newest' ? 1 : 0) +
@@ -1602,11 +1744,12 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
   else if (activeModule === 'promo') { filteredListLength = filteredPromo.length; originalListLength = master?.promo?.length || 0; }
   else if (activeModule === 'inventaris') { filteredListLength = filteredInventaris.length; originalListLength = inventarisData.length; }
   else if (activeModule === 'shift') { filteredListLength = filteredShift.length; originalListLength = shiftData.length; }
+  else if (activeModule === 'pegawai') { filteredListLength = filteredPegawai.length; originalListLength = master?.pegawai?.length || 0; }
 
   return (
     <SelectionContext.Provider value={{ selectedIds, isSelectionMode, toggleSelection, handleEditItem, getItemId }}>
       <div 
-        className="space-y-6 text-left pb-24 relative max-w-full overflow-x-hidden"
+        className="space-y-6 text-left pb-24 pt-6 relative max-w-full overflow-x-hidden"
         onTouchStart={handleTouchStart} 
         onTouchMove={handleTouchMove} 
         onTouchEnd={handleTouchEnd}
@@ -1633,7 +1776,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     <Settings className="h-5 w-5 sm:h-6 sm:w-6" />
                   </div>
                   <div className="text-left">
-                    <h3 className="text-sm sm:text-base font-black text-zinc-900 uppercase tracking-widest leading-none">
+                    <h3 className="text-xs sm:text-base font-black text-zinc-900 uppercase tracking-widest leading-none">
                       Manajemen Data Pokok
                     </h3>
                     <p className="text-[10px] text-zinc-500 mt-1.5 font-medium leading-relaxed max-w-xl">
@@ -1649,7 +1792,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               {modules.map(m => (
                 <button
                   key={m.id}
-                  onClick={() => openModule(m.id)}
+                  onClick={() => {
+                    if (m.onClick) m.onClick();
+                    else openModule(m.id);
+                  }}
                   className={`border border-zinc-200/80 rounded-[28px] p-5 text-left hover:border-zinc-300 hover:shadow-md hover:-translate-y-1 transition-all group flex flex-col justify-between items-start w-full aspect-square relative overflow-hidden cursor-pointer ${m.colorClass} ${m.borderColorClass}`}
                 >
                   <div className={`h-11 w-11 sm:h-12 sm:w-12 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-all shadow-sm ${m.iconColorClass}`}>
@@ -1860,33 +2006,34 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     </div>
                   ) : (
                     <div className="grid gap-3.5">
-                      {filteredCabang.map((c, i) => (
-                        <SelectableCard key={i} item={c}>
-                          <div className="h-11 w-11 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
-                            <Building className="h-5.5 w-5.5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
-                                {c.NAMA_CABANG}
-                              </h5>
-                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-600 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                ID: {c.ID_CABANG}
-                              </span>
+                      {filteredCabang.map((c, i) => {
+                        const isInactive = String(c.STATUS || 'AKTIF').trim().toUpperCase() === 'TIDAK AKTIF';
+                        return (
+                          <SelectableCard key={i} item={c} className={isInactive ? "opacity-50 grayscale" : ""}>
+                            <div className={`h-11 w-11 rounded-full flex items-center justify-center shrink-0 ${isInactive ? 'bg-zinc-100 text-zinc-500' : 'bg-blue-50 text-blue-700'}`}>
+                              <Building className="h-5.5 w-5.5" />
                             </div>
-                            <div className="flex items-center justify-between mt-1">
-                              <p className="text-[11px] text-zinc-500 font-semibold truncate pr-3 flex items-center gap-1">
-                                <MapPin className="h-3 w-3 text-amber-500 shrink-0 inline" /> <span className="truncate">{c.LOKASI}</span>
-                              </p>
-                              {c.KONTAK && (
-                                <span className="text-[9px] font-black text-zinc-500 bg-zinc-55 border border-zinc-105 px-1.5 py-0.5 rounded self-center shrink-0">
-                                  WA: {c.KONTAK}
-                                </span>
-                              )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none text-left">
+                                  {c.NAMA_CABANG}
+                                  {isInactive && <span className="ml-2 text-[10px] bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded font-black">NONAKTIF</span>}
+                                </h5>
+                              </div>
+                              <div className="flex items-center justify-between mt-1">
+                                <p className="text-[11px] text-zinc-500 font-semibold truncate pr-3 flex items-center gap-1">
+                                  <MapPin className={`h-3 w-3 shrink-0 inline ${isInactive ? 'text-zinc-400' : 'text-blue-500'}`} /> <span className="truncate">{c.LOKASI}</span>
+                                </p>
+                                {c.KONTAK && (
+                                  <span className="text-[9px] font-black text-zinc-500 bg-zinc-55 border border-zinc-105 px-1.5 py-0.5 rounded self-center shrink-0">
+                                    WA: {c.KONTAK}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </SelectableCard>
-                      ))}
+                          </SelectableCard>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1909,12 +2056,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none text-left">
                                 {k.NAMA_KATEGORI}
                               </h5>
-                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                ID: {k.ID_KATEGORI}
-                              </span>
                             </div>
                             <div className="flex items-center justify-between mt-1">
                               <p className="text-[11px] text-zinc-400 font-bold truncate">
@@ -1946,12 +2090,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none text-left">
                                 {m.NAMA_MENU}
                               </h5>
-                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                ID: {m.ID_MENU}
-                              </span>
                             </div>
                             <div className="flex items-center justify-between mt-1">
                               <p className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1">
@@ -1976,35 +2117,35 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     </div>
                   ) : (
                     <div className="grid gap-3.5">
-                      {filteredVarian.map((v, i) => (
-                        <SelectableCard key={i} item={v}>
-                          <div className="h-11 w-11 rounded-full bg-orange-50 text-orange-700 flex items-center justify-center shrink-0">
-                            <Layers className="h-5.5 w-5.5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-wider leading-none">
-                                {v.NAMA_VARIAN}
-                              </h5>
-                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                ID: {v.ID_VARIAN}
-                              </span>
+                      {filteredVarian.map((v, i) => {
+                        const isInactive = v.STATUS !== 'Tersedia' && String(v.STATUS || '').trim().toUpperCase() !== 'AKTIF';
+                        return (
+                          <SelectableCard key={i} item={v} className={isInactive ? "opacity-50 grayscale" : ""}>
+                            <div className={`h-11 w-11 rounded-full flex items-center justify-center shrink-0 ${isInactive ? 'bg-zinc-100 text-zinc-500' : 'bg-orange-50 text-orange-700'}`}>
+                              <Layers className="h-5.5 w-5.5" />
                             </div>
-                            <div className="flex items-center justify-between mt-1">
-                              <div className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1.5 min-w-0">
-                                <span className="truncate">Menu: {getMenuName(v.ID_MENU)}</span>
-                                <span className="opacity-40">&bull;</span>
-                                <span className={`px-1.5 py-0.2 rounded font-black uppercase text-[8px] self-center shrink-0 ${v.STATUS === 'Tersedia' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                                  {v.STATUS}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-wider leading-none text-left">
+                                  {v.NAMA_VARIAN}
+                                </h5>
+                              </div>
+                              <div className="flex items-center justify-between mt-1">
+                                <div className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1.5 min-w-0">
+                                  <span className="truncate">Menu: {getMenuName(v.ID_MENU)}</span>
+                                  <span className="opacity-40">&bull;</span>
+                                  <span className={`px-1.5 py-0.2 rounded font-black uppercase text-[8px] self-center shrink-0 ${!isInactive ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                                    {!isInactive ? 'Tersedia' : 'Tidak Tersedia'}
+                                  </span>
+                                </div>
+                                <span className={`text-xs sm:text-sm font-black self-center shrink-0 ml-2 ${isInactive ? 'text-zinc-500' : 'text-red-850'}`}>
+                                  Rp{Number(v.HARGA).toLocaleString('id-ID')}
                                 </span>
                               </div>
-                              <span className="text-xs sm:text-sm font-black text-red-850 self-center shrink-0 ml-2">
-                                Rp{Number(v.HARGA).toLocaleString('id-ID')}
-                              </span>
                             </div>
-                          </div>
-                        </SelectableCard>
-                      ))}
+                          </SelectableCard>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2027,12 +2168,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none text-left">
                                 {p.NAMA_PROMO}
                               </h5>
-                              <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                ID: {p.ID_PROMO}
-                              </span>
                             </div>
                             <div className="flex items-center justify-between mt-1.5">
                               <div className="text-[11px] text-zinc-550 font-semibold truncate flex flex-col gap-1 items-start min-w-0">
@@ -2121,29 +2259,71 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           <div className="h-11 w-11 rounded-full bg-fuchsia-50 text-fuchsia-700 flex items-center justify-center shrink-0">
                             <UserCog className="h-5.5 w-5.5" />
                           </div>
-                          <div className="flex-1 min-w-0">
-                             <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0 text-left">
+                             <div className="flex items-start justify-between gap-2">
                                 <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
-                                   {item.NAMA_STAFF}
+                                   {item.NAMA_STAFF || getPegawaiName(item.ID_PEGAWAI)}
                                  </h5>
-                                 <span className="hidden">
-                                   {item.CABANG}
+                                 <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
+                                   {getCabangName(item.CABANG || item.ID_CABANG)}
                                  </span>
                              </div>
                              <div className="flex items-center justify-between mt-1">
-                                <p className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1">
-                                  <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">{getCabangName(item.CABANG || item.ID_CABANG)}</span>
+                                <p className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1 text-left">
                                   <span className="truncate">Alasan: {item.ALASAN}</span>
                                 </p>
                                 <span className="text-[10px] text-zinc-400 font-bold whitespace-nowrap ml-2">
                                   {formatDateString(item.TANGGAL || item.tanggal)}
                                 </span>
                              </div>
-                             {item.PENGGANTI && (
-                                <div className="mt-1">
-                                  <span className="bg-amber-50 text-amber-700 text-[9px] font-black border border-amber-100 px-1.5 py-0.5 rounded uppercase">Pengganti: {item.PENGGANTI}</span>
+                             {(item.PENGGANTI || item.ID_PENGGANTI) && (
+                                <div className="mt-1 text-left">
+                                  <span className="bg-amber-50 text-amber-700 text-[9px] font-black border border-amber-100 px-1.5 py-0.5 rounded uppercase">Pengganti: {item.PENGGANTI || getPegawaiName(item.ID_PENGGANTI)}</span>
                                 </div>
                              )}
+                          </div>
+                        </SelectableCard>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeModule === 'pegawai' && master && (
+                <div className="max-w-4xl mx-auto">
+                  {(master.pegawai || []).length === 0 ? (
+                    <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+                      <Users className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
+                      <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Pegawai Kosong</p>
+                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Belum ada catatan master pegawai terdaftar. Tambahkan baru dengan tombol + di bawah.</p>
+                    </div>
+                  ) : filteredPegawai.length === 0 ? (
+                    <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
+                      <Search className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
+                      <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Pencarian Tidak Ditemukan</p>
+                      <p className="text-xs text-zinc-400 mt-2 max-w-xs font-medium leading-relaxed">Tidak ada pegawai yang cocok dengan kata kunci pencarian Anda.</p>
+                    </div>
+                  ) : (
+                    <div className="grid gap-3.5">
+                      {filteredPegawai.map((item, i) => (
+                        <SelectableCard key={i} item={item}>
+                          <div className="h-11 w-11 rounded-full bg-teal-50 text-teal-700 flex items-center justify-center shrink-0">
+                            <Users className="h-5.5 w-5.5" />
+                          </div>
+                          <div className="flex-1 min-w-0 text-left">
+                             <div className="flex items-start justify-between gap-2">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
+                                   {item.NAMA_PEGAWAI}
+                                </h5>
+                                <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
+                                  {getCabangName(item.ID_CABANG)}
+                                </span>
+                             </div>
+                             <div className="flex items-center justify-between mt-1">
+                                <p className="text-[11px] text-zinc-500 font-semibold truncate text-left">
+                                  Kontak: {item.KONTAK || 'Tidak ada kontak'}
+                                </p>
+                             </div>
                           </div>
                         </SelectableCard>
                       ))}
@@ -2175,7 +2355,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       {/* MODALS */}
       {showModal && (
         <div style={{ zIndex: 999999 }} className="modal-container-class fixed inset-0 bg-zinc-950/50 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300 ease-out">
-          <div className="bg-white bottom-0 fixed sm:relative w-full max-w-lg sm:rounded-[32px] rounded-t-[24px] shadow-2xl flex flex-col max-h-[96dvh] sm:max-h-[90vh] animate-in slide-in-from-bottom-32 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300 ease-out">
+          <div className="bg-white bottom-0 fixed sm:relative w-full max-w-lg sm:rounded-[32px] rounded-t-[24px] shadow-2xl flex flex-col h-[100dvh] sm:h-auto max-h-[100dvh] sm:max-h-[95vh] animate-in slide-in-from-bottom-32 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300 ease-out">
             <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0">
               <h3 className="font-black text-zinc-900 uppercase tracking-widest text-lg">
                 {getIsEditing() ? 'Edit' : 'Tambah'} {
@@ -2190,7 +2370,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               </button>
             </div>
             
-            <div className="p-6 overflow-y-auto w-full relative">
+            <div className="p-6 overflow-y-auto w-full relative flex-1">
               {isSubmitting && (
                 <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex flex-col items-center justify-center animate-in fade-in">
                   <RefreshCw className="h-8 w-8 text-red-650 animate-spin mb-3" />
@@ -2203,35 +2383,22 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* INVENTARIS FORM */}
                 {showModal === 'inventaris' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Logistik</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-600 select-none">
-                          {formData.ID_LOG}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tanggal</label>
-                      <input type="datetime-local" value={formData.tanggal || formData.TANGGAL || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
+                      <input type="date" value={formData.tanggal ? formData.tanggal.split('T')[0] : (formData.TANGGAL ? formData.TANGGAL.split('T')[0] : '')} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
-                      <select 
-                        required 
-                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
-                        value={
-                          master?.cabang?.find(c => 
-                            String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase() ||
-                            String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase()
-                          )?.ID_CABANG || ''
-                        } 
-                        onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
-                        <option value="">-- Pilih Cabang --</option>
-                        {master?.cabang?.map(c => (
-                          <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
-                        ))}
-                      </select>
+                      <CustomSelect 
+                        required
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        placeholder="-- Pilih Cabang --"
+                        value={formData.cabang || formData.CABANG || formData.ID_CABANG || ''}
+                        onChange={val => setFormData({...formData, cabang: val, CABANG: val})}
+                        options={master?.cabang?.filter(c => c.STATUS === 'AKTIF').map(c => ({ value: c.ID_CABANG, label: c.NAMA_CABANG })) || []}
+                      />
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Barang</label>
@@ -2240,10 +2407,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Jenis (Masuk/Keluar)</label>
-                        <select required value={formData.JENIS || ''} className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, JENIS: e.target.value})}>
-                          <option value="MASUK">Masuk</option>
-                          <option value="KELUAR">Keluar</option>
-                        </select>
+                        <CustomSelect 
+                          required 
+                          className="w-full"
+                          textSizeClass="text-sm"
+                          value={formData.JENIS || ''}
+                          onChange={(val) => setFormData({...formData, JENIS: val})}
+                          placeholder="-- Pilih Jenis --"
+                          options={[{ value: 'MASUK', label: 'Masuk' }, { value: 'KELUAR', label: 'Keluar' }]}
+                        />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Jumlah</label>
@@ -2264,11 +2436,71 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">PIC / Penanggung Jawab</label>
-                      <input type="text" placeholder="Nama Staff" value={formData.PIC || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, PIC: e.target.value})}/>
+                      <CustomSelect 
+                        required
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        placeholder="-- Pilih Staff --"
+                        value={formData.PIC || ''}
+                        onChange={val => {
+                           const pObj = (master?.pegawai || []).find(x => x.ID_PEGAWAI === val || x.NAMA_PEGAWAI === val);
+                           setFormData({...formData, PIC: pObj ? pObj.NAMA_PEGAWAI : val});
+                        }}
+                        options={(master?.pegawai || [])
+                          .filter(p => {
+                            const selectedCab = formData.cabang || formData.CABANG || '';
+                            return !selectedCab || String(p.ID_CABANG).trim().toLowerCase() === String(selectedCab).trim().toLowerCase();
+                          })
+                          .map(p => ({ value: p.NAMA_PEGAWAI, label: p.NAMA_PEGAWAI }))
+                        }
+                      />
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Keterangan Lengkap</label>
-                      <textarea rows={3} placeholder="Sebutkan detail, keperluan, atau deskripsi logistik..." value={formData.KETERANGAN || ''} className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, KETERANGAN: e.target.value})}></textarea>
+                      <div className="relative">
+                        <textarea 
+                          rows={3} 
+                          placeholder="Sebutkan detail, keperluan, atau deskripsi logistik..." 
+                          value={formData.KETERANGAN || ''} 
+                          onFocus={() => setShowKeteranganSuggestions(true)}
+                          onBlur={() => {
+                            setTimeout(() => setShowKeteranganSuggestions(false), 200);
+                          }}
+                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                          onChange={e => setFormData({...formData, KETERANGAN: e.target.value})}
+                        ></textarea>
+                        {showKeteranganSuggestions && (
+                          <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-zinc-200 rounded-2xl shadow-xl z-[1000] max-h-48 overflow-y-auto divide-y divide-zinc-100">
+                            {(formData.JENIS === 'MASUK' ? [
+                              "Pemasukan dari penjualan tunai harian",
+                              "Penerimaan setoran modal awal dari sistem pusat",
+                              "Pengembalian dana sisa belanja bahan baku operasional",
+                              "Penerimaan dana kompensasi / subsidi operasional",
+                              "Pemasukan dari kerja sama promosi / sponsorship lokal"
+                            ] : [
+                              "Belanja kebutuhan bahan baku dapur harian",
+                              "Pembayaran iuran listrik token outlet bulanan",
+                              "Uang makan staff pegawai dan operasional lapangan",
+                              "Pengadaan peralatan memasak dan perlengkapan inventaris baru",
+                              "Biaya perbaikan kerusakan mesin pres gelas atau kompor",
+                              "Biaya transportasi/kurir pengantaran logistik darurat",
+                              "Biaya tak terduga penunjang kebersihan dan keamanan outlet"
+                            ]).map((text, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onMouseDown={() => {
+                                  setFormData({...formData, KETERANGAN: text});
+                                  setShowKeteranganSuggestions(false);
+                                }}
+                                className="w-full text-left px-4 py-3 text-xs font-black text-red-950 uppercase hover:bg-zinc-50 active:bg-zinc-100 transition cursor-pointer"
+                              >
+                                {text}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </>
                 )}
@@ -2276,44 +2508,65 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* SHIFT STAFF FORM */}
                 {showModal === 'shift' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Izin</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-600 select-none">
-                          {formData.ID_IZIN}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tanggal Izin</label>
-                      <input type="datetime-local" value={formData.tanggal || formData.TANGGAL || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
+                      <input type="date" value={formData.tanggal ? formData.tanggal.split('T')[0] : (formData.TANGGAL ? formData.TANGGAL.split('T')[0] : '')} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})}/>
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Cabang</label>
-                      <select 
-                        required 
-                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
-                        value={
-                          master?.cabang?.find(c => 
-                            String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase() ||
-                            String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || '').trim().toLowerCase()
-                          )?.ID_CABANG || ''
-                        } 
-                        onChange={e => setFormData({...formData, cabang: e.target.value, CABANG: e.target.value})}>
-                        <option value="">-- Pilih Cabang --</option>
-                        {master?.cabang?.map(c => (
-                          <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
-                        ))}
-                      </select>
+                      <CustomSelect 
+                        required
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        placeholder="-- Pilih Cabang --"
+                        value={formData.cabang || formData.CABANG || formData.ID_CABANG || ''}
+                        onChange={val => setFormData({...formData, cabang: val, CABANG: val})}
+                        options={master?.cabang?.filter(c => c.STATUS === 'AKTIF').map(c => ({ value: c.ID_CABANG, label: c.NAMA_CABANG })) || []}
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Staff</label>
-                        <input type="text" placeholder="Budi" value={formData.NAMA_STAFF || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, NAMA_STAFF: e.target.value})}/>
+                        <CustomSelect 
+                          required
+                          className="w-full"
+                          textSizeClass="text-sm"
+                          placeholder="-- Pilih Staff --"
+                          value={formData.ID_PEGAWAI || ''}
+                          onChange={val => {
+                             const pObj = (master?.pegawai || []).find(x => x.ID_PEGAWAI === val);
+                             setFormData({
+                               ...formData,
+                               ID_PEGAWAI: val,
+                               NAMA_STAFF: pObj ? pObj.NAMA_PEGAWAI : ''
+                             });
+                          }}
+                          options={(master?.pegawai || [])
+                            .filter(p => {
+                              const selectedCab = formData.cabang || formData.CABANG || '';
+                              return !selectedCab || String(p.ID_CABANG).trim().toLowerCase() === String(selectedCab).trim().toLowerCase();
+                            })
+                            .map(p => ({ value: p.ID_PEGAWAI, label: p.NAMA_PEGAWAI }))
+                          }
+                        />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Staff Pengganti</label>
-                        <input type="text" placeholder="(Optional)" value={formData.PENGGANTI || ''} className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, PENGGANTI: e.target.value})}/>
+                        <CustomSelect 
+                          className="w-full"
+                          textSizeClass="text-sm"
+                          placeholder="-- Pilih Staff --"
+                          value={formData.ID_PENGGANTI || ''}
+                          onChange={val => setFormData({...formData, ID_PENGGANTI: val})}
+                          options={(master?.pegawai || [])
+                            .filter(p => {
+                              const selectedCab = formData.cabang || formData.CABANG || '';
+                              return !selectedCab || String(p.ID_CABANG).trim().toLowerCase() === String(selectedCab).trim().toLowerCase();
+                            })
+                            .map(p => ({ value: p.ID_PEGAWAI, label: p.NAMA_PEGAWAI }))
+                          }
+                        />
                       </div>
                     </div>
                     <div>
@@ -2336,41 +2589,29 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       </div>
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Cabang</label>
-                        <select 
-                          required 
-                          className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all" 
-                          value={
-                            master?.cabang?.find(c => 
-                              String(c.ID_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || formData.ID_CABANG || '').trim().toLowerCase() ||
-                              String(c.NAMA_CABANG).trim().toLowerCase() === String(formData.cabang || formData.CABANG || formData.ID_CABANG || '').trim().toLowerCase()
-                            )?.ID_CABANG || ''
-                          }
-                          onChange={e => {
-                            const val = e.target.value;
-                            setFormData({...formData, cabang: val, CABANG: val});
-                          }}>
-                          <option value="">-- Pilih Cabang --</option>
-                          {master?.cabang?.map(c => (
-                            <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
-                          ))}
-                        </select>
+                        <CustomSelect
+                            required 
+                            className="w-full"
+                            value={formData.cabang || formData.CABANG || formData.ID_CABANG || ''}
+                            onChange={(val) => setFormData({...formData, cabang: val, CABANG: val})}
+                            placeholder="-- Pilih Cabang --"
+                            options={master?.cabang?.filter(c => c.STATUS === 'AKTIF').map(c => ({ value: c.ID_CABANG, label: c.NAMA_CABANG })) || []}
+                          />
                       </div>
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Jenis Transaksi (Kategori)</label>
-                      <select 
+                      <CustomSelect 
                         required 
-                        className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all" 
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        placeholder="-- Pilih Jenis Transaksi --"
                         value={formData.jenis || formData.JENIS || 'Pendapatan Usaha'} 
-                        onChange={e => {
-                          const val = e.target.value;
-                          let matchedTipe = 'Masuk'; // Debit
+                        onChange={(val) => {
+                          let matchedTipe = 'Masuk';
                           if (val === 'Biaya Produksi' || val === 'Beban Usaha' || val === 'Prive' || val === 'Piutang Usaha') {
-                            matchedTipe = 'Keluar'; // Kredit
-                          } else if (val === 'Pendapatan Usaha' || val === 'Utang Usaha') {
-                            matchedTipe = 'Masuk'; // Debit
+                            matchedTipe = 'Keluar';
                           }
-                          
                           setFormData({
                             ...formData,
                             jenis: val,
@@ -2378,33 +2619,55 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                             tipe: matchedTipe
                           });
                         }}
-                      >
-                        <option value="Pendapatan Usaha">Pendapatan Usaha</option>
-                        <option value="Biaya Produksi">Pengeluaran Bahan Baku</option>
-                        <option value="Beban Usaha">Beban Usaha</option>
-                        <option value="Prive">Prive</option>
-                        <option value="Utang Usaha">Utang Usaha</option>
-                        <option value="Piutang Usaha">Piutang Usaha</option>
-                      </select>
+                        options={[
+                          { value: 'Pendapatan Usaha', label: 'Pendapatan Usaha' },
+                          { value: 'Biaya Produksi', label: 'Pengeluaran Bahan Baku' },
+                          { value: 'Beban Usaha', label: 'Beban Usaha' },
+                          { value: 'Prive', label: 'Prive' },
+                          { value: 'Utang Usaha', label: 'Utang Usaha' },
+                          { value: 'Piutang Usaha', label: 'Piutang Usaha' }
+                        ]}
+                      />
                     </div>
-                    <div>
+                    <div className="relative">
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Keterangan Tambahan</label>
-                      <input type="text" list="keterangan-suggestions" placeholder="Detail transaksi..." value={formData.keterangan || formData.KETERANGAN || ''} className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all"
-                        onChange={e => setFormData({...formData, keterangan: e.target.value, KETERANGAN: e.target.value})} />
-                      <datalist id="keterangan-suggestions">
-                        {(() => {
-                          const jenis = formData.jenis || formData.JENIS || 'Pendapatan Usaha';
-                          let defaultSuggestion = '';
-                          if (jenis === 'Pendapatan Usaha') defaultSuggestion = 'Pendapatan Harian Usaha';
-                          if (jenis === 'Biaya Produksi') defaultSuggestion = 'Pengeluaran Biaya Bahan Baku';
-                          if (jenis === 'Beban Usaha') defaultSuggestion = 'Beban Operasional';
-                          if (jenis === 'Prive') defaultSuggestion = 'Pengambilan Dana Pribadi';
-                          if (jenis === 'Utang Usaha') defaultSuggestion = 'Utang Harian Usaha';
-                          if (jenis === 'Piutang Usaha') defaultSuggestion = 'Piutang Harian Usaha';
+                      <input 
+                        type="text" 
+                        placeholder="Detail transaksi..." 
+                        value={formData.keterangan || formData.KETERANGAN || ''} 
+                        className="w-full text-xs font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all uppercase"
+                        onFocus={() => setShowKasSuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowKasSuggestions(false), 200)}
+                        onChange={e => setFormData({...formData, keterangan: e.target.value.toUpperCase(), KETERANGAN: e.target.value.toUpperCase()})} 
+                      />
+                      {showKasSuggestions && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-zinc-200 rounded-2xl shadow-xl z-[1000] max-h-40 overflow-y-auto divide-y divide-zinc-100">
+                          {(() => {
+                            const jenis = formData.jenis || formData.JENIS || 'Pendapatan Usaha';
+                            let suggestions: string[] = [];
+                            if (jenis === 'Pendapatan Usaha') suggestions = ['PENDAPATAN HARIAN USAHA'];
+                            if (jenis === 'Biaya Produksi') suggestions = ['PENGELUARAN BIAYA BAHAN BAKU'];
+                            if (jenis === 'Beban Usaha') suggestions = ['BEBAN OPERASIONAL'];
+                            if (jenis === 'Prive') suggestions = ['PENGAMBILAN DANA PRIBADI'];
+                            if (jenis === 'Utang Usaha') suggestions = ['UTANG HARIAN USAHA'];
+                            if (jenis === 'Piutang Usaha') suggestions = ['PIUTANG HARIAN USAHA'];
 
-                          return defaultSuggestion ? <option value={defaultSuggestion} /> : null;
-                        })()}
-                      </datalist>
+                            return suggestions.map((sg, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onMouseDown={() => {
+                                  setFormData({...formData, keterangan: sg, KETERANGAN: sg});
+                                  setShowKasSuggestions(false);
+                                }}
+                                className="w-full text-left px-4 py-3 text-xs font-black text-red-950 uppercase hover:bg-zinc-50 active:bg-zinc-100 transition cursor-pointer"
+                              >
+                                {sg}
+                              </button>
+                            ));
+                          })()}
+                        </div>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -2417,7 +2680,6 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                             type="text" 
                             inputMode="numeric"
                             placeholder="0" 
-                            required 
                             value={formatRupiahInput(formData.cash || '')} 
                             className="w-full pl-9 pr-3 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none" 
                             onChange={e => {
@@ -2438,7 +2700,6 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                             type="text" 
                             inputMode="numeric"
                             placeholder="0" 
-                            required 
                             value={formatRupiahInput(formData.transfer || '')} 
                             className="w-full pl-9 pr-3 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none" 
                             onChange={e => {
@@ -2464,20 +2725,127 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                         />
                       </div>
                     </div>
+
+                    <div className="pt-2 border-t border-dashed border-zinc-200 mt-4">
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5 font-bold">Bukti Nota (Hanya Foto)</label>
+                      
+                      {/* 1. Existing Photo in Database */}
+                      {(formData.foto || formData.FOTO || formData.bukti || formData.BUKTI) && !selectedPhotoFile ? (
+                        <div className="p-3 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center gap-3">
+                          <img 
+                            src={formData.foto || formData.FOTO || formData.bukti || formData.BUKTI} 
+                            alt="Bukti Nota" 
+                            className="h-14 w-14 object-cover rounded-lg border border-zinc-200 bg-white"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="flex-1 min-w-0 text-left">
+                            <span className="block text-[10px] font-extrabold text-zinc-500 uppercase tracking-wider">Foto Tersimpan</span>
+                            <a 
+                              href={formData.foto || formData.FOTO || formData.bukti || formData.BUKTI} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="text-xs font-bold text-red-700 hover:underline truncate block text-left"
+                            >
+                              Buka Foto Penuh ↗
+                            </a>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({
+                                ...formData,
+                                foto: '',
+                                FOTO: '',
+                                bukti: '',
+                                BUKTI: ''
+                              });
+                            }}
+                            className="p-2 text-zinc-400 hover:text-red-700 bg-white hover:bg-red-50 border border-zinc-200 hover:border-red-200 rounded-lg transition active:scale-90 cursor-pointer animate-in fade-in"
+                            title="Hapus Foto"
+                          >
+                            <Trash2 className="h-4 w-4 text-zinc-500 hover:text-red-700" />
+                          </button>
+                        </div>
+                      ) : selectedPhotoFile ? (
+                        /* 2. New Photo Selected Locally */
+                        <div className="p-3 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center gap-3 animate-in zoom-in-95 duration-200">
+                          <img 
+                            src={selectedPhotoFile.preview} 
+                            alt="Pratinjau Foto" 
+                            className="h-14 w-14 object-cover rounded-lg border border-zinc-200 bg-white"
+                          />
+                          <div className="flex-1 min-w-0 text-left">
+                            <span className="block text-[10px] font-extrabold text-emerald-600 uppercase tracking-wider animate-pulse">Foto Baru Terpilih</span>
+                            <span className="text-xs font-bold text-zinc-700 truncate block text-left">{selectedPhotoFile.name}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPhotoFile(null);
+                              setPhotoError('');
+                            }}
+                            className="p-2 text-zinc-400 hover:text-red-700 bg-white hover:bg-red-50 border border-zinc-200 hover:border-red-200 rounded-lg transition active:scale-90 cursor-pointer"
+                            title="Batalkan Pilihan"
+                          >
+                            <X className="h-4 w-4 text-zinc-500 hover:text-red-700" />
+                          </button>
+                        </div>
+                      ) : (
+                        /* 3. Drag and Drop / Select File Zone */
+                        <div className="animate-in fade-in">
+                          <div
+                            onDragOver={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                            onDrop={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const files = e.dataTransfer.files;
+                              if (files && files.length > 0) {
+                                handlePhotoSelect(files[0]);
+                              }
+                            }}
+                            onClick={() => {
+                              document.getElementById('photo-file-input')?.click();
+                            }}
+                            className="border-2 border-dashed border-zinc-300 hover:border-zinc-400 bg-zinc-50/50 hover:bg-zinc-50 rounded-xl p-4 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-1.5"
+                          >
+                            <Camera className="h-6 w-6 text-zinc-400" />
+                            <div>
+                              <span className="text-xs font-bold text-zinc-700 block">Pilih atau Tarik Foto Bukti</span>
+                              <span className="text-[9px] text-zinc-400 font-extrabold uppercase tracking-wider block">Format: JPG / PNG (Maks 5MB)</span>
+                            </div>
+                          </div>
+                          <input 
+                            id="photo-file-input"
+                            type="file" 
+                            accept="image/*"
+                            className="hidden"
+                            onChange={e => {
+                              const files = e.target.files;
+                              if (files && files.length > 0) {
+                                handlePhotoSelect(files[0]);
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
+                      
+                      {photoError && (
+                        <p className="text-[10px] text-red-650 font-extrabold uppercase tracking-wide mt-1.5 flex items-center gap-1 animate-bounce text-left">
+                          <AlertCircle className="h-3 w-3" />
+                          {photoError}
+                        </p>
+                      )}
+                    </div>
                   </>
                 )}
 
                 {/* MASTER CABANG FORM */}
                 {showModal === 'cabang' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Cabang</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
-                          {formData.ID_CABANG}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Cabang</label>
                       <input type="text" placeholder="Aura Makassar" value={formData.NAMA_CABANG || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, NAMA_CABANG: e.target.value})}/>
@@ -2511,20 +2879,28 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Kontak WA</label>
                       <input type="text" placeholder="08123456789" value={formData.KONTAK || ''} className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, KONTAK: e.target.value})}/>
                     </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Status Cabang</label>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only peer" 
+                          checked={String(formData.STATUS || 'AKTIF').trim().toUpperCase() === 'AKTIF'}
+                          onChange={e => setFormData({...formData, STATUS: e.target.checked ? 'AKTIF' : 'TIDAK AKTIF'})}
+                        />
+                        <div className="w-14 h-7 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-emerald-500"></div>
+                        <span className="ml-3 text-xs font-bold text-zinc-700">
+                          {String(formData.STATUS || 'AKTIF').trim().toUpperCase() === 'AKTIF' ? 'Cabang Aktif' : 'Tidak Aktif'}
+                        </span>
+                      </label>
+                    </div>
                   </>
                 )}
 
                 {/* MASTER KATEGORI FORM */}
                 {showModal === 'kategori' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Kategori</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
-                          {formData.ID_KATEGORI}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Kategori</label>
                       <input type="text" placeholder="Minuman Sachet" value={formData.NAMA_KATEGORI || ''} required className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" onChange={e => setFormData({...formData, NAMA_KATEGORI: e.target.value})}/>
@@ -2535,28 +2911,19 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* MASTER MENU FORM */}
                 {showModal === 'menu' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Menu</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
-                          {formData.ID_MENU}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Kategori</label>
-                      <select 
-                        required 
+                      <CustomSelect 
+                        required
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        placeholder={!master?.kategori || master.kategori.length === 0 ? "Tidak ada Kategori" : "-- Pilih Kategori --"}
                         disabled={!master?.kategori || master.kategori.length === 0}
-                        value={formData.ID_KATEGORI || ''} 
-                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none disabled:opacity-50" 
-                        onChange={e => setFormData({...formData, ID_KATEGORI: e.target.value})}
-                      >
-                        {(!master?.kategori || master.kategori.length === 0) && <option value="">Tidak ada Kategori</option>}
-                        {master?.kategori?.map((k: any) => (
-                          <option key={k.ID_KATEGORI} value={k.ID_KATEGORI}>{k.NAMA_KATEGORI}</option>
-                        ))}
-                      </select>
+                        value={formData.ID_KATEGORI || ''}
+                        onChange={val => setFormData({...formData, ID_KATEGORI: val})}
+                        options={master?.kategori?.map(k => ({ value: k.ID_KATEGORI, label: k.NAMA_KATEGORI })) || []}
+                      />
                     </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Menu</label>
@@ -2568,14 +2935,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* MASTER VARIAN FORM */}
                 {showModal === 'varian' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Varian</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
-                          {formData.ID_VARIAN}
-                        </div>
-                      </div>
-                    )}
+
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Kategori</label>
@@ -2634,13 +2994,19 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                         </div>
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Status</label>
-                        <select className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none"
-                          value={formData.STATUS || 'Tersedia'}
-                          onChange={e => setFormData({...formData, STATUS: e.target.value})}>
-                          <option value="Tersedia">Tersedia</option>
-                          <option value="Tidak Tersedia">Tidak Tersedia</option>
-                        </select>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Status Varian</label>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            className="sr-only peer" 
+                            checked={formData.STATUS === 'Tersedia' || String(formData.STATUS || '').trim().toUpperCase() === 'AKTIF'}
+                            onChange={e => setFormData({...formData, STATUS: e.target.checked ? 'Tersedia' : 'Tidak Tersedia'})}
+                          />
+                          <div className="w-14 h-7 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-emerald-500"></div>
+                          <span className="ml-3 text-xs font-bold text-zinc-700">
+                            {formData.STATUS === 'Tersedia' || String(formData.STATUS || '').trim().toUpperCase() === 'AKTIF' ? 'Tersedia (Aktif)' : 'Tidak Tersedia'}
+                          </span>
+                        </label>
                       </div>
                     </div>
                   </>
@@ -2649,14 +3015,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                 {/* MASTER PROMO FORM */}
                 {showModal === 'promo' && (
                   <>
-                    {getIsEditing() && (
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Promo</label>
-                        <div className="w-full p-3 bg-zinc-100 border border-zinc-200 rounded-xl text-sm font-bold font-mono text-zinc-650 select-none">
-                          {formData.ID_PROMO}
-                        </div>
-                      </div>
-                    )}
+
                     <div>
                       <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Promo</label>
                       <input 
@@ -2671,15 +3030,15 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tipe Promo</label>
-                        <select 
+                        <CustomSelect 
                           required 
+                          className="w-full"
+                          textSizeClass="text-sm"
                           value={formData.TIPE || 'DISKON_PERSEN'} 
-                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
-                          onChange={e => setFormData({...formData, TIPE: e.target.value})}
-                        >
-                          <option value="DISKON_PERSEN">Diskon Persentase (%)</option>
-                          <option value="HARGA_FIX">Harga Tetap Paket (Rupiah)</option>
-                        </select>
+                          onChange={(val) => setFormData({...formData, TIPE: val})}
+                          placeholder="-- Pilih Tipe Promo --"
+                          options={[{ value: 'DISKON_PERSEN', label: 'Diskon Persentase (%)' }, { value: 'HARGA_FIX', label: 'Harga Tetap Paket (Rupiah)' }]}
+                        />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Syarat Qty Minimal</label>
@@ -2793,6 +3152,48 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           <p className="text-[10px] font-bold text-zinc-400 italic">Belum ada varian yang dipilih.</p>
                         )}
                       </div>
+                    </div>
+                  </>
+                )}
+
+                {/* MASTER PEGAWAI FORM */}
+                {showModal === 'pegawai' && (
+                  <>
+
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Pilih Cabang</label>
+                      <select 
+                        required 
+                        value={formData.ID_CABANG || ''} 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        onChange={e => setFormData({...formData, ID_CABANG: e.target.value})}
+                      >
+                        <option value="">-- Pilih Cabang --</option>
+                        {(master?.cabang || []).map(cab => (
+                          <option key={cab.ID_CABANG} value={cab.ID_CABANG}>{cab.NAMA_CABANG}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Pegawai</label>
+                      <input 
+                        type="text" 
+                        placeholder="Nama Pegawai (Contoh: Joni)" 
+                        value={formData.NAMA_PEGAWAI || ''} 
+                        required 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        onChange={e => setFormData({...formData, NAMA_PEGAWAI: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Kontak / No. Telepon</label>
+                      <input 
+                        type="text" 
+                        placeholder="08123456789" 
+                        value={formData.KONTAK || ''} 
+                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                        onChange={e => setFormData({...formData, KONTAK: e.target.value})}
+                      />
                     </div>
                   </>
                 )}

@@ -7,6 +7,7 @@ import AdminPanel from './components/AdminPanel';
 import ReportsPanel from './components/ReportsPanel';
 import ReceiptThermal from './components/ReceiptThermal';
 import HistoryPage from './components/HistoryPage';
+import RekapOperasionalPanel from './components/RekapOperasionalPanel';
 import { Transaction, Cabang } from './types';
 import { getTransactions, seedMasterDataIfEmpty, getMasterData, processSyncQueue, syncMasterDataFromGAS, saveMasterData } from './utils/db';
 import { printReceipt } from './utils/pdf';
@@ -37,7 +38,8 @@ import {
   XCircle,
   History,
   ReceiptText,
-  Printer
+  Printer,
+  ClipboardList
 } from 'lucide-react';
 
 
@@ -61,7 +63,7 @@ export default function App() {
   const activeBranchName = cabangList.find(c => String(c.ID_CABANG) === String(activeBranch))?.NAMA_CABANG || (activeBranch === 'ADMIN' ? 'ADMIN' : (storedBranchName || activeBranch));
   const [isCheckoutPageActive, setIsCheckoutPageActive] = useState<boolean>(false);
   
-  type TabTypes = 'dashboard' | 'pos' | 'admin' | 'laporan' | 'history';
+  type TabTypes = 'dashboard' | 'pos' | 'admin' | 'laporan' | 'history' | 'rekap_operasional';
   
   const [activeTab, setActiveTab] = useState<TabTypes>(() => {
     const branch = localStorage.getItem('AURA_FOOD_BRANCH') || '';
@@ -72,7 +74,7 @@ export default function App() {
   const [posInitialCreateMode, setPosInitialCreateMode] = useState<boolean>(false);
 
   const [isAdminModuleActive, setIsAdminModuleActive] = useState<boolean>(false);
-  const isFullScreenTab = isCheckoutPageActive || activeTab === 'history' || (activeTab === 'admin' && isAdminModuleActive);
+  const isFullScreenTab = isCheckoutPageActive || activeTab === 'history' || activeTab === 'rekap_operasional';
 
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -174,9 +176,10 @@ export default function App() {
       const data = result.data || result;
       if (data && (data.cabang || data.kategori || data.menu || data.varian)) {
         const branches = data.cabang || [];
-        setDiagnosticFoundBranches(branches);
+        const activeBranches = branches.filter((c: any) => String(c.STATUS || '').trim().toUpperCase() === 'AKTIF');
+        setDiagnosticFoundBranches(activeBranches);
 
-        // Save immediately to replace standard database records
+        // Save immediately to replace standard database records (save all branches locally for admin module, but sync state with active only)
         await saveMasterData({
           cabang: branches,
           kategori: data.kategori || [],
@@ -184,14 +187,14 @@ export default function App() {
           varian: data.varian || []
         });
 
-        // Sync local App state cabang list
-        setCabangList(branches);
+        // Sync local App state cabang list (only active)
+        setCabangList(activeBranches);
 
         setDiagnosticLogs(prev => [...prev, `SINKRONISASI SUKSES!`]);
-        setDiagnosticLogs(prev => [...prev, `Ditemukan: ${branches.length} Cabang, ${data.menu?.length || 0} Menu.`]);
+        setDiagnosticLogs(prev => [...prev, `Ditemukan: ${branches.length} Cabang (Aktif: ${activeBranches.length}), ${data.menu?.length || 0} Menu.`]);
         setDiagnosticLogs(prev => [
           ...prev, 
-          `🔑 Data Cabang dari Spreadsheets:` + branches.map((c: any) => `\n- Nama Cabang: "${c.NAMA_CABANG}" -> Sandi: "${c.PASSWORD}"`).join('')
+          `🔑 Data Cabang dari Spreadsheets:` + activeBranches.map((c: any) => `\n- Nama Cabang: "${c.NAMA_CABANG}" -> Sandi: "${c.PASSWORD}"`).join('')
         ]);
         setDiagnosticStatus('success');
       } else {
@@ -398,8 +401,12 @@ export default function App() {
       try {
         let currentCabangList = [];
         const data = await seedMasterDataIfEmpty();
-        currentCabangList = data.cabang;
-        setCabangList(data.cabang);
+        
+        // Filter only active branches
+        const activeBranches = (data.cabang || []).filter((c: any) => String(c.STATUS || '').trim().toUpperCase() === 'AKTIF');
+        
+        currentCabangList = activeBranches;
+        setCabangList(activeBranches);
 
         // Auto-sync Master Data in background on startup if online
         if (navigator.onLine) {
@@ -407,8 +414,9 @@ export default function App() {
             await syncMasterDataFromGAS();
             const updatedData = await getMasterData();
             if (updatedData && updatedData.cabang && updatedData.cabang.length > 0) {
-              currentCabangList = updatedData.cabang;
-              setCabangList(updatedData.cabang);
+              const activeUpdatedBranches = updatedData.cabang.filter((c: any) => String(c.STATUS || '').trim().toUpperCase() === 'AKTIF');
+              currentCabangList = activeUpdatedBranches;
+              setCabangList(activeUpdatedBranches);
             }
             handleReloadData(); // Refresh POSSimulator data
           } catch (syncErr) {
@@ -492,7 +500,7 @@ export default function App() {
          try {
             const localData = await getMasterData();
             if (localData && localData.cabang && localData.cabang.length > 0) {
-               currentList = localData.cabang;
+               currentList = localData.cabang.filter((c: any) => String(c.STATUS || '').trim().toUpperCase() === 'AKTIF');
                setCabangList(currentList);
             }
          } catch (dbErr) {
@@ -631,6 +639,7 @@ export default function App() {
   // Scroll to top when tab changes
   useEffect(() => {
     window.scrollTo(0, 0);
+    setSelectedTx(null);
   }, [activeTab]);
 
   return (
@@ -701,9 +710,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setShowLogoutModal(true);
+                     e.preventDefault();
+                     e.stopPropagation();
+                     setShowLogoutModal(true);
                   }}
                   title="Keluar Sesi Cabang"
                   className="bg-red-900 border border-red-800 hover:bg-amber-500 hover:text-red-950 hover:border-amber-400 text-white p-2.5 sm:p-3 rounded-xl flex items-center justify-center transition shadow-[0_0_10px_rgba(0,0,0,0.1)] active:scale-95 cursor-pointer relative z-50 pointer-events-auto"
@@ -931,9 +940,15 @@ export default function App() {
               </div>
             )}
 
+            {activeTab === 'rekap_operasional' && (
+              <div className="flex-grow flex flex-col bg-neutral-50 animate-fade-in">
+                <RekapOperasionalPanel cabangList={cabangList} onBack={() => setActiveTab('admin')} />
+              </div>
+            )}
+
             {activeTab === 'admin' && (
               <div className={isAdminModuleActive ? "flex-grow flex flex-col bg-neutral-50" : "space-y-6 animate-fade-in"}>
-                <AdminPanel onRefreshPOSCatalog={handleReloadData} onModuleActiveChange={setIsAdminModuleActive} />
+                <AdminPanel onRefreshPOSCatalog={handleReloadData} onModuleActiveChange={setIsAdminModuleActive} onOpenRekapOperasional={() => setActiveTab('rekap_operasional')} />
                 
                 {!isAdminModuleActive && (
                   <div className="bg-red-50 border border-red-100 p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-left">

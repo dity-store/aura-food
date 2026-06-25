@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { CustomSelect } from './CustomSelect';
 import { 
   BarChart, 
   PieChart, 
@@ -354,6 +355,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       
       const debit = Number(t.DEBIT || t.Masuk || t[4] || 0);
       const kredit = Number(t.KREDIT || t.Keluar || t[5] || 0);
+      const foto = t.FOTO || t.foto || t.bukti || t.BUKTI || '';
 
       return {
         original: t,
@@ -363,7 +365,8 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
         kategori: kat,
         debit,
         kredit,
-        tglStr
+        tglStr,
+        foto
       };
     });
   }, [rawTransactions]);
@@ -653,7 +656,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
               <FileText className="h-5 w-5 sm:h-6 sm:w-6" />
             </div>
             <div className="text-left">
-              <h3 className="text-sm font-black text-zinc-900 uppercase tracking-wider">
+              <h3 className="text-xs font-black text-zinc-900 uppercase tracking-wider">
                 Kinerja Kerja
               </h3>
               <p className="text-[10px] text-zinc-500 mt-0.5 max-w-sm hidden sm:block">
@@ -758,17 +761,12 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           {/* Cabang */}
           <div className="flex-1 space-y-1.5">
             <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Cabang Toko</label>
-            <select 
-              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
+            <CustomSelect 
+              className={`w-full text-[10px] sm:text-xs font-bold ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterCabang}
-              disabled={loadingBukuKas}
-              onChange={(e) => setFilterCabang(e.target.value)}
-            >
-              <option value="ALL">SEMUA CABANG</option>
-              {cabangList.map(c => (
-                <option key={c.ID_CABANG} value={c.ID_CABANG}>{c.NAMA_CABANG}</option>
-              ))}
-            </select>
+              options={[{ value: 'ALL', label: 'SEMUA CABANG' }, ...cabangList.map(c => ({ value: String(c.ID_CABANG), label: c.NAMA_CABANG }))]}
+              onChange={(val) => setFilterCabang(val)}
+            />
           </div>
 
           {/* Periode */}
@@ -787,12 +785,18 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                 </div>
               </div>
             </div>
-            <select 
-              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
+            <CustomSelect
+              className={`w-full text-[10px] sm:text-xs font-bold ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterPeriode}
-              disabled={loadingBukuKas}
-              onChange={(e) => {
-                const nextPeriod = e.target.value as ReportPeriod;
+              options={[
+                { value: 'HARIAN', label: 'HARIAN' },
+                { value: 'BULANAN', label: 'BULANAN' },
+                { value: 'KUARTAL', label: 'KUARTAL (3 BLN)' },
+                { value: 'SEMESTER', label: 'SEMESTER (6 BLN)' },
+                { value: 'TAHUNAN', label: 'TAHUNAN' }
+              ]}
+              onChange={(val) => {
+                const nextPeriod = val as ReportPeriod;
                 setFilterPeriode(nextPeriod);
                 if (nextPeriod === 'KUARTAL') {
                   setSelectedMonth(prev => {
@@ -808,28 +812,22 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                   setSelectedMonth(new Date().getMonth());
                 }
               }}
-            >
-              <option value="HARIAN">HARIAN</option>
-              <option value="BULANAN">BULANAN</option>
-              <option value="KUARTAL">KUARTAL (3 BLN)</option>
-              <option value="SEMESTER">SEMESTER (6 BLN)</option>
-              <option value="TAHUNAN">TAHUNAN</option>
-            </select>
+            />
           </div>
 
           {/* Type */}
           <div className="flex-[1.5] space-y-1.5">
             <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Jenis Data</label>
-            <select 
-              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
+            <CustomSelect 
+              className={`w-full text-[10px] sm:text-xs font-bold ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterType}
-              disabled={loadingBukuKas}
-              onChange={(e) => setFilterType(e.target.value as ReportType)}
-            >
-              <option value="GABUNGAN">PEMASUKAN & PENGELUARAN</option>
-              <option value="PEMASUKAN">PEMASUKAN SAJA</option>
-              <option value="PENGELUARAN">PENGELUARAN SAJA</option>
-            </select>
+              options={[
+                { value: 'GABUNGAN', label: 'PEMASUKAN & PENGELUARAN' },
+                { value: 'PEMASUKAN', label: 'PEMASUKAN SAJA' },
+                { value: 'PENGELUARAN', label: 'PENGELUARAN SAJA' }
+              ]}
+              onChange={(val) => setFilterType(val as ReportType)}
+            />
           </div>
 
           {/* Date / Time Filters Contextual */}
@@ -1067,6 +1065,43 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                   </span>
                 </div>
               </div>
+
+              {selectedTx.foto && (
+                <div className="flex flex-col gap-2 pt-3 border-t border-zinc-100">
+                  <span className="block text-[9px] font-black text-zinc-400 uppercase tracking-wider">Bukti Nota / Foto</span>
+                  <div className="relative rounded-xl overflow-hidden border border-zinc-200 bg-zinc-50 max-h-40 flex items-center justify-center">
+                    <img 
+                      src={selectedTx.foto} 
+                      alt="Bukti Nota" 
+                      className="max-h-40 object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                    <a 
+                      href={selectedTx.foto} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="absolute bottom-2 right-2 bg-zinc-900/80 hover:bg-zinc-900 text-white text-[9px] font-extrabold px-2 py-1 rounded-md uppercase tracking-wider flex items-center gap-1 backdrop-blur-xs transition"
+                    >
+                      Buka Penuh
+                    </a>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const text = `*BUKTI TRANSAKSI KAS*\n\n` +
+                        `• Keterangan: ${selectedTx.ket || selectedTx.keterangan}\n` +
+                        `• Kategori: ${selectedTx.kat || selectedTx.kategori}\n` +
+                        `• Jumlah: ${selectedTx.isDebit ? '+' : '-'}Rp${selectedTx.nominal.toLocaleString('id-ID')}\n` +
+                        `• Tanggal: ${selectedTx.tgl}\n` +
+                        `• Cabang: ${selectedTx.cabName || 'Semua'}\n\n` +
+                        `*Link Bukti Nota:* ${selectedTx.foto}`;
+                      window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
+                    }}
+                    className="mt-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] py-2.5 rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 uppercase tracking-wider cursor-pointer"
+                  >
+                    Bagikan Ke WA
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Footer Action */}
