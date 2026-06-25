@@ -1,6 +1,6 @@
 {
   "name": "Sistem Keuangan Aura Food",
   "description": "Sistem POS Offline-First dengan sinkronisasi Google Sheets, Capacitor, dan cetak struk thermal.",
-  "requestFramePermissions": ["bluetooth"],
+  "requestFramePermissions": ["bluetooth", "camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
