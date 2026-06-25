@@ -300,7 +300,8 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   };
 
   let validPesanan = pesanan.filter(p => {
-    if (idCabang !== 'All' && String(p.ID_CABANG) !== String(idCabang)) return false;
+    const pIdCabang = String(p.ID_CABANG || p[2] || '').trim();
+    if (idCabang !== 'All' && pIdCabang !== String(idCabang).trim()) return false;
     if (selectedDateStr) {
       const pDate = p.TANGGAL_WAKTU || p[1];
       if (!pDate) return false;
@@ -347,7 +348,8 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
       const yesterdayDateStr = `${yr}-${mo}-${dy}`;
       
       const yesterdayPesanan = pesanan.filter(p => {
-        if (idCabang !== 'All' && String(p.ID_CABANG) !== String(idCabang)) return false;
+        const pIdCabang = String(p.ID_CABANG || p[2] || '').trim();
+        if (idCabang !== 'All' && pIdCabang !== String(idCabang).trim()) return false;
         const pDate = p.TANGGAL_WAKTU || p[1];
         if (!pDate) return false;
         if (getLocalDateString(pDate) !== yesterdayDateStr) return false;
@@ -424,7 +426,13 @@ export async function getAdminReportsData(
   pemasukan: number;
   pengeluaran: number;
   saldoBersih: number;
+  saldoAwal: number;
+  totalSaldoAkhir: number;
+  totalCash: number;
+  totalTransfer: number;
   transaksi: any[];
+  textLaporan: string;
+  namaCabang: string;
 }> {
   const config = getGASConfig();
   if (!config || !config.webAppUrl) throw new Error('Konfigurasi endpoint GAS belum diatur.');
@@ -453,7 +461,13 @@ export async function getAdminReportsData(
       pemasukan: Number(fetchedData.pemasukan || 0),
       pengeluaran: Number(fetchedData.pengeluaran || 0),
       saldoBersih: Number(fetchedData.saldoBersih || 0),
-      transaksi: fetchedData.transaksi || []
+      saldoAwal: Number(fetchedData.saldoAwal || 0),
+      totalSaldoAkhir: Number(fetchedData.totalSaldoAkhir || 0),
+      totalCash: Number(fetchedData.totalCash || 0),
+      totalTransfer: Number(fetchedData.totalTransfer || 0),
+      transaksi: fetchedData.transaksi || [],
+      textLaporan: fetchedData.textLaporan || '',
+      namaCabang: fetchedData.namaCabang || ''
     };
   } catch (err: any) {
     console.error("Fetch error in getAdminReportsData:", err);

@@ -26,7 +26,8 @@ import {
   ReceiptText,
   X,
   Info,
-  Check
+  Check,
+  CreditCard
 } from 'lucide-react';
 import { Cabang, Transaction } from '../types';
 import { getTransactions, getTransactionsFromGAS, getAdminReportsData } from '../utils/db';
@@ -131,17 +132,25 @@ function getMenuAggregates(txs: Transaction[]): MenuAgg[] {
   return Object.values(menuMap).sort((a, b) => b.totalQty - a.totalQty);
 }
 
+const getTodayLocalDateStr = () => {
+  const d = new Date();
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dy = String(d.getDate()).padStart(2, '0');
+  return `${yr}-${mo}-${dy}`;
+};
+
 export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelProps) {
 
   const session = getSessionCache();
 
-  // Filters initialized from session memory OR persistence OR default
+  // Filters initialized to HARIAN and today's local date on first mount, or load from session if available
   const [filterCabang, setFilterCabang] = useState<string>(() => session.filters.reports?.filterCabang || localStorage.getItem('AURA_REPORTS_FILTER_CABANG') || 'ALL');
-  const [filterPeriode, setFilterPeriode] = useState<ReportPeriod>(() => session.filters.reports?.filterPeriode || localStorage.getItem('AURA_REPORTS_FILTER_PERIODE') as ReportPeriod || 'HARIAN');
+  const [filterPeriode, setFilterPeriode] = useState<ReportPeriod>(() => session.filters.reports?.filterPeriode || 'HARIAN');
   const [filterType, setFilterType] = useState<ReportType>(() => session.filters.reports?.filterType || localStorage.getItem('AURA_REPORTS_FILTER_TYPE') as ReportType || 'GABUNGAN');
   const [selectedMonth, setSelectedMonth] = useState<number>(() => session.filters.reports?.selectedMonth ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_MONTH') || new Date().getMonth()));
   const [selectedYear, setSelectedYear] = useState<number>(() => session.filters.reports?.selectedYear ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_YEAR') || new Date().getFullYear()));
-  const [selectedDate, setSelectedDate] = useState<string>(() => session.filters.reports?.selectedDate || localStorage.getItem('AURA_REPORTS_FILTER_DATE') || new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<string>(() => session.filters.reports?.selectedDate || getTodayLocalDateStr());
 
   // Ref to prevent identical redundant fetches
   const lastFetchParamsRef = useRef<string>(session.reports.lastParams);
@@ -157,17 +166,21 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     pengeluaran: number;
     saldoBersih: number;
     transaksi: any[];
+    totalCash?: number;
+    totalTransfer?: number;
+    saldoAwal?: number;
+    totalSaldoAkhir?: number;
   } | null>(() => {
     // 1. Memory Check
     if (session.reports.data) return session.reports.data;
 
     try {
       const initialBranch = activeBranch === 'ADMIN' ? filterCabang : activeBranch;
-      const initialPeriode = localStorage.getItem('AURA_REPORTS_FILTER_PERIODE') || 'BULANAN';
-      const initialType = localStorage.getItem('AURA_REPORTS_FILTER_TYPE') || 'GABUNGAN';
-      const initialMonth = localStorage.getItem('AURA_REPORTS_FILTER_MONTH') || String(new Date().getMonth());
-      const initialYear = localStorage.getItem('AURA_REPORTS_FILTER_YEAR') || String(new Date().getFullYear());
-      const initialDate = localStorage.getItem('AURA_REPORTS_FILTER_DATE') || new Date().toISOString().substring(0, 10);
+      const initialPeriode = session.filters.reports?.filterPeriode || 'HARIAN';
+      const initialType = session.filters.reports?.filterType || localStorage.getItem('AURA_REPORTS_FILTER_TYPE') || 'GABUNGAN';
+      const initialMonth = session.filters.reports?.selectedMonth ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_MONTH') || new Date().getMonth());
+      const initialYear = session.filters.reports?.selectedYear ?? Number(localStorage.getItem('AURA_REPORTS_FILTER_YEAR') || new Date().getFullYear());
+      const initialDate = session.filters.reports?.selectedDate || getTodayLocalDateStr();
       
       const key = `cached_laporan_data_${initialBranch || 'ALL'}_${initialPeriode}_${initialType}_${initialYear}_${initialMonth}_${initialDate}`;
       const cached = localStorage.getItem(key);
@@ -297,11 +310,11 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       const customEvt = e as CustomEvent;
       if (selectedTx !== null) {
         setSelectedTx(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showShareMenu) {
         setShowShareMenu(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       }
     };
@@ -361,82 +374,98 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   // Retrieve & calculate the SALDO AWAL (Starting Balance)
   // Note: With pure server-side filtering, previous period cumulative balance is handled upstream if needed,
   // currently we set it to 0 as the API returns exact net total metrics for the requested period.
-  const calculatedSaldoAwal = 0;
+  const calculatedSaldoAwal = bukuKasData?.saldoAwal || 0;
 
   // Since the Backend API now perfectly handles all multidimensional filtering (cabang, periode, tipe data),
   // we can use the parsed returned data directly and reduce massive client processing
-  const filteredKasTransactions = parsedKasTransactions; 
+  const filteredKasTransactions = useMemo(() => {
+    let currentSaldo = calculatedSaldoAwal;
+    return parsedKasTransactions.map(tx => {
+      currentSaldo += (tx.debit - tx.kredit);
+      return {
+        ...tx,
+        saldo: currentSaldo
+      };
+    });
+  }, [parsedKasTransactions, calculatedSaldoAwal]); 
   
   // Directly pull exact aggregated stats from backend
   const totalOmset = bukuKasData?.pemasukan || 0;
   const totalPengeluaran = bukuKasData?.pengeluaran || 0;
   const saldoBersih = bukuKasData?.saldoBersih || 0;
 
-  const getShareText = () => {
-    let cabangName = "SEMUA CABANG";
-    if (filterCabang !== 'ALL') {
-      cabangName = (cabangList.find(c => String(c.ID_CABANG) === String(filterCabang))?.NAMA_CABANG || `Cabang ${filterCabang}`).toUpperCase();
-    }
-    
-    let titleContext = "";
-    if (filterPeriode === 'HARIAN') {
-      const parts = selectedDate.split('-');
-      titleContext = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : selectedDate;
-    } else if (filterPeriode === 'BULANAN') {
-      titleContext = `${months[selectedMonth].toUpperCase()} ${selectedYear}`;
-    } else if (filterPeriode === 'KUARTAL') {
-      const qSelected = Math.ceil((selectedMonth + 1) / 3);
-      const qNames = ["JANUARI-MARET", "APRIL-JUNI", "JULI-SEPTEMBER", "OKTOBER-DESEMBER"];
-      titleContext = `KUARTAL ${qSelected} - ${qNames[qSelected - 1]} ${selectedYear}`;
-    } else if (filterPeriode === 'SEMESTER') {
-      const sSelected = selectedMonth < 6 ? 1 : 2;
-      const sNames = ["JANUARI-JUNI", "JULI-DESEMBER"];
-      titleContext = `SEMESTER ${sSelected} - ${sNames[sSelected - 1]} ${selectedYear}`;
-    } else if (filterPeriode === 'TAHUNAN') {
-      titleContext = `TAHUN ${selectedYear}`;
-    }
+  // Sum up cash and transfer from actual transactions loaded
+  // But strictly ONLY when debit > 0 (as requested: "hanya ambil transaksi yg debitnya tidak 0, alias ambil cash hanya dari uang masuk saja")
+  const calculatedTotalCashAndTransfer = useMemo(() => {
+    let totalCash = 0;
+    let totalTransfer = 0;
 
-    let text = `📃*LAPORAN REKAPITULASI AURA FOOD (${titleContext})*\n\n`;
-    text += `🗓️ *Periode:* ${filterPeriode}\n`;
-    text += `🏢 *Cabang:* ${cabangName}\n\n`;
-    text += `✅ *Saldo Awal (Profit Bulan Lalu):* Rp${calculatedSaldoAwal.toLocaleString('id-ID')}\n`;
-    text += `📈 *Total Omset (Pemasukan):* Rp${totalOmset.toLocaleString('id-ID')}\n`;
-    text += `📉 *Total Pengeluaran:* Rp${totalPengeluaran.toLocaleString('id-ID')}\n`;
-    text += `💰 *Saldo Bersih:* Rp${saldoBersih.toLocaleString('id-ID')}\n\n`;
-    text += `Rincian Aliran Transaksi Kas:\n`;
-    
-    if (filteredKasTransactions.length === 0) {
-      text += `- Belum ada data pencatatan buku kas untuk opsi filter ini\n`;
-    } else {
-      filteredKasTransactions.forEach((t: any, idx: number) => {
-        const sign = t.debit > 0 ? '+' : '-';
-        const nominal = t.debit > 0 ? t.debit : t.kredit;
-        const formattedDate = formatDateToDMY(t.date, t.tglStr);
-        text += `${idx + 1}. [${formattedDate}] ${t.keterangan}: ${sign}Rp${nominal.toLocaleString('id-ID')}\n`;
-      });
-    }
-    return text;
-  };
+    parsedKasTransactions.forEach((tx) => {
+      if (tx.debit > 0) {
+        const t = tx.original || {};
+        const cashVal = Number(t.cash || t.CASH || t.total_cash || t.TOTAL_CASH || t.Total_Cash || (Array.isArray(t) ? t[6] : 0) || 0);
+        const transVal = Number(t.transfer || t.TRANSFER || t.total_transfer || t.TOTAL_TRANSFER || t.Total_Transfer || (Array.isArray(t) ? t[7] : 0) || 0);
+
+        if (cashVal === 0 && transVal === 0) {
+          const lowerKategori = String(tx.kategori || '').toLowerCase();
+          const lowerKet = String(tx.keterangan || '').toLowerCase();
+          if (lowerKategori.includes('transfer') || lowerKategori.includes('qris') || lowerKategori.includes('debit') || lowerKet.includes('transfer') || lowerKet.includes('qris')) {
+            totalTransfer += tx.debit;
+          } else {
+            totalCash += tx.debit;
+          }
+        } else {
+          totalCash += cashVal;
+          totalTransfer += transVal;
+        }
+      }
+    });
+
+    return { totalCash, totalTransfer };
+  }, [parsedKasTransactions]);
 
   const handleCopyText = () => {
-    navigator.clipboard.writeText(getShareText());
+    navigator.clipboard.writeText(bukuKasData?.textLaporan || '');
     setToastType('success');
     setToastMessage("Berhasil disalin ke papan klip!");
     setShowShareMenu(false);
   };
 
   const handleShareWA = () => {
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(getShareText())}`, '_blank');
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(bukuKasData?.textLaporan || '')}`, '_blank');
     setToastType('success');
     setToastMessage("Berhasil dibagikan ke WhatsApp!");
     setShowShareMenu(false);
   };
 
-  const handleExportPDF = () => {
-    window.print();
-    setToastType('success');
-    setToastMessage("Berhasil mengarsipkan laporan menjadi PDF!");
-    setShowShareMenu(false);
+  const handleExportPDF = async () => {
+    try {
+      const element = document.getElementById('report-content');
+      if (!element) return;
+      
+      setToastMessage("Menyiapkan PDF...");
+      
+      const { default: html2canvas } = await import('html2canvas');
+      const { default: jsPDF } = await import('jspdf');
+      
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
+      const imgData = canvas.toDataURL('image/jpeg', 1.0);
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Laporan_Aura_${selectedDate}.pdf`);
+      
+      setToastType('success');
+      setToastMessage("Berhasil mengarsipkan laporan menjadi PDF!");
+    } catch (err) {
+      console.error(err);
+      setToastType('error');
+      setToastMessage("Gagal menyimpan PDF.");
+    } finally {
+      setShowShareMenu(false);
+    }
   };
 
   const loadData = async (forceRemote = false) => {
@@ -459,7 +488,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       
       // Compute formatted params
       const dateParts = selectedDate.split('-'); // YYYY-MM-DD
-      const paramTanggal = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : '';
+      const paramTanggal = (filterPeriode === 'HARIAN' && dateParts.length === 3) ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : '';
       const paramBulan = selectedMonth + 1;
       const paramTahun = selectedYear;
       
@@ -486,7 +515,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
         targetSemester
       });
 
-      if (!forceRemote && lastFetchParamsRef.current === currentParamsKey) {
+      // GUARD: Check if filters actually changed since last remote fetch AND we have data
+      const hasCachedData = localStorage.getItem(cacheKey) !== null;
+      if (!forceRemote && lastFetchParamsRef.current === currentParamsKey && hasCachedData) {
         setLoadingBukuKas(false);
         return; 
       }
@@ -544,6 +575,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
 
   return (
     <div 
+      id="report-content"
       className="space-y-6 animate-fade-in text-left pb-24 relative max-w-full overflow-x-hidden"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -578,7 +610,8 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           <div className="relative">
             <button 
               onClick={() => setShowShareMenu(!showShareMenu)}
-              className="p-2 sm:p-2 bg-white/80 backdrop-blur-md hover:bg-zinc-50 border border-zinc-200 text-zinc-600 rounded-xl transition active:scale-95 shadow-sm"
+              disabled={loadingBukuKas}
+              className={`p-2 sm:p-2 backdrop-blur-md border border-zinc-200 text-zinc-600 rounded-xl transition shadow-sm ${loadingBukuKas ? 'bg-zinc-100 opacity-50 cursor-not-allowed' : 'bg-white/80 hover:bg-zinc-50 active:scale-95 cursor-pointer'}`}
             >
               <Share2 className="h-4 w-4" />
             </button>
@@ -630,59 +663,93 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           </div>
         </div>
  
-        {/* Summary Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 relative z-10 pt-2">
-          <div className="bg-emerald-50 border border-emerald-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-            <div className="flex items-center gap-1.5 mb-1.5 text-emerald-600">
-               <TrendingUp className="h-4 w-4" />
-               <p className="text-[9px] font-black tracking-widest uppercase">Total Omset</p>
+        {/* Summary & Cash/Transfer Bento Grid Container */}
+        <div className="space-y-3 relative z-10 pt-2">
+          {/* Summary Grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="bg-emerald-50 border border-emerald-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 mb-1.5 text-emerald-600">
+                 <TrendingUp className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Total Omset</p>
+              </div>
+              <h4 className="text-sm sm:text-base font-black text-emerald-700">
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${totalOmset.toLocaleString('id-ID')}`
+                )}
+              </h4>
+              {/* No nested cash/transfer breakdown here */}
             </div>
-            <h4 className="text-sm sm:text-base font-black text-emerald-700">
-              {loadingBukuKas ? (
-                <span className="text-zinc-400 animate-pulse">Loading...</span>
-              ) : (
-                `Rp${totalOmset.toLocaleString('id-ID')}`
-              )}
-            </h4>
+            <div className="bg-red-50 border border-red-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 mb-1.5 text-red-600">
+                 <TrendingDown className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Pengeluaran</p>
+              </div>
+              <h4 className="text-sm sm:text-base font-black text-red-700">
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${totalPengeluaran.toLocaleString('id-ID')}`
+                )}
+              </h4>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 mb-1.5 text-amber-600">
+                 <Layers className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Saldo Awal</p>
+              </div>
+              <h4 className="text-sm sm:text-base font-black text-amber-700">
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${calculatedSaldoAwal.toLocaleString('id-ID')}`
+                )}
+              </h4>
+            </div>
+            <div className={`border p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center ${saldoBersih >= 0 ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                 <Wallet className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Saldo Bersih</p>
+              </div>
+              <h4 className={`text-sm sm:text-base font-black ${saldoBersih >= 0 ? 'text-sky-700' : 'text-orange-700'}`}>
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${saldoBersih.toLocaleString('id-ID')}`
+                )}
+              </h4>
+            </div>
           </div>
-          <div className="bg-red-50 border border-red-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-            <div className="flex items-center gap-1.5 mb-1.5 text-red-600">
-               <TrendingDown className="h-4 w-4" />
-               <p className="text-[9px] font-black tracking-widest uppercase">Pengeluaran</p>
+
+          {/* Cash & Transfer Split Row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-purple-50 border border-purple-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 mb-1.5 text-purple-600">
+                 <Banknote className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Tunai (Cash)</p>
+              </div>
+              <h4 className="text-sm sm:text-base font-black text-purple-700">
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${calculatedTotalCashAndTransfer.totalCash.toLocaleString('id-ID')}`
+                )}
+              </h4>
             </div>
-            <h4 className="text-sm sm:text-base font-black text-red-700">
-              {loadingBukuKas ? (
-                <span className="text-zinc-400 animate-pulse">Loading...</span>
-              ) : (
-                `Rp${totalPengeluaran.toLocaleString('id-ID')}`
-              )}
-            </h4>
-          </div>
-          <div className="bg-amber-50 border border-amber-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-            <div className="flex items-center gap-1.5 mb-1.5 text-amber-600">
-               <Layers className="h-4 w-4" />
-               <p className="text-[9px] font-black tracking-widest uppercase">Saldo Awal</p>
+            <div className="bg-indigo-50 border border-indigo-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 mb-1.5 text-indigo-600">
+                 <CreditCard className="h-4 w-4" />
+                 <p className="text-[9px] font-black tracking-widest uppercase">Transfer / QRIS</p>
+              </div>
+              <h4 className="text-sm sm:text-base font-black text-indigo-700">
+                {loadingBukuKas ? (
+                  <span className="text-zinc-400 animate-pulse">Loading...</span>
+                ) : (
+                  `Rp${calculatedTotalCashAndTransfer.totalTransfer.toLocaleString('id-ID')}`
+                )}
+              </h4>
             </div>
-            <h4 className="text-sm sm:text-base font-black text-amber-700">
-              {loadingBukuKas ? (
-                <span className="text-zinc-400 animate-pulse">Loading...</span>
-              ) : (
-                `Rp${calculatedSaldoAwal.toLocaleString('id-ID')}`
-              )}
-            </h4>
-          </div>
-          <div className={`border p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center ${saldoBersih >= 0 ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
-            <div className="flex items-center gap-1.5 mb-1.5">
-               <Wallet className="h-4 w-4" />
-               <p className="text-[9px] font-black tracking-widest uppercase">Saldo Bersih</p>
-            </div>
-            <h4 className={`text-sm sm:text-base font-black ${saldoBersih >= 0 ? 'text-sky-700' : 'text-orange-700'}`}>
-              {loadingBukuKas ? (
-                <span className="text-zinc-400 animate-pulse">Loading...</span>
-              ) : (
-                `Rp${saldoBersih.toLocaleString('id-ID')}`
-              )}
-            </h4>
           </div>
         </div>
 
@@ -692,8 +759,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           <div className="flex-1 space-y-1.5">
             <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Cabang Toko</label>
             <select 
-              className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto"
+              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterCabang}
+              disabled={loadingBukuKas}
               onChange={(e) => setFilterCabang(e.target.value)}
             >
               <option value="ALL">SEMUA CABANG</option>
@@ -720,8 +788,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
               </div>
             </div>
             <select 
-              className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto"
+              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterPeriode}
+              disabled={loadingBukuKas}
               onChange={(e) => {
                 const nextPeriod = e.target.value as ReportPeriod;
                 setFilterPeriode(nextPeriod);
@@ -752,8 +821,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           <div className="flex-[1.5] space-y-1.5">
             <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Jenis Data</label>
             <select 
-              className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto"
+              className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
               value={filterType}
+              disabled={loadingBukuKas}
               onChange={(e) => setFilterType(e.target.value as ReportType)}
             >
               <option value="GABUNGAN">PEMASUKAN & PENGELUARAN</option>
@@ -769,8 +839,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
               <input 
                 type="date"
                 max={new Date().toISOString().split('T')[0]}
-                className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 sm:py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm"
+                className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 sm:py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
                 value={selectedDate}
+                disabled={loadingBukuKas}
                 onChange={(e) => setSelectedDate(e.target.value)}
               />
             </div>
@@ -780,8 +851,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                 <div className="flex-1 space-y-1.5 min-w-0">
                   <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Tahun</label>
                   <select 
-                    className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-2 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto cursor-pointer"
+                    className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-2 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto cursor-pointer ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
                     value={selectedYear}
+                    disabled={loadingBukuKas}
                     onChange={(e) => setSelectedYear(Number(e.target.value))}
                   >
                     {(() => {
@@ -800,8 +872,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                       {filterPeriode === 'BULANAN' ? 'Bulan' : filterPeriode === 'KUARTAL' ? 'Kuartal' : 'Semester'}
                     </label>
                     <select 
-                      className="w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-2 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto cursor-pointer"
+                      className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-2 py-2.5 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm appearance-auto cursor-pointer ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
                       value={selectedMonth}
+                      disabled={loadingBukuKas}
                       onChange={(e) => setSelectedMonth(Number(e.target.value))}
                     >
                       {filterPeriode === 'BULANAN' && months.map((m, i) => <option key={i} value={i}>{m.substring(0,3)}</option>)}
@@ -848,9 +921,9 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
         </div>
         <div className="p-0">
           {loadingBukuKas ? (
-            <div className="p-12 text-center text-sm font-medium text-zinc-500 flex flex-col items-center justify-center gap-3">
+            <div className="py-20 text-center text-zinc-500 bg-white rounded-[32px] border border-zinc-200 shadow-sm flex flex-col items-center justify-center gap-3 animate-pulse">
               <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
-              <p>Memuat Buku Kas dari Sistem Pusat...</p>
+              <p className="text-sm font-medium text-zinc-600">Memuat data dari sistem pusat...</p>
             </div>
           ) : (!bukuKasData || !filteredKasTransactions || filteredKasTransactions.length === 0) ? (
             <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
@@ -899,18 +972,24 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                       </div>
                       
                       {/* Last Message content (Jenis/Kategori) */}
-                      <div className="flex items-center justify-between mt-1">
-                        <p className="text-[11px] text-zinc-500 font-medium truncate pr-3 flex items-center gap-1.5">
+                      <div className="flex items-start justify-between mt-1">
+                        <p className="text-[11px] text-zinc-500 font-medium truncate pr-3 flex items-center gap-1.5 mt-0.5">
                           <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
                             {cabName}
                           </span>
                           <span>{kat}</span>
                         </p>
                         
-                        {/* Numeric Badge (Debit/Kredit sesuai warna) */}
-                        <span className={`text-[10.5px] font-extrabold tracking-tight px-2 py-0.5 rounded-full shrink-0 ${isDebit ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
-                          {isDebit ? '+' : '-'}Rp{nominal.toLocaleString('id-ID')}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          {/* Numeric Badge (Debit/Kredit sesuai warna) */}
+                          <span className={`text-[10.5px] font-extrabold tracking-tight px-2 py-0.5 rounded-full shrink-0 ${isDebit ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
+                            {isDebit ? '+' : '-'}Rp{nominal.toLocaleString('id-ID')}
+                          </span>
+                          {/* Saldo Kumulatif */}
+                          <span className="text-[9px] font-bold text-zinc-400">
+                            Saldo: Rp{(t.saldo || 0).toLocaleString('id-ID')}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>

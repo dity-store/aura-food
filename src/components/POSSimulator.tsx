@@ -166,6 +166,7 @@ export default function POSSimulator({
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   });
+  const [isMetricsLoading, setIsMetricsLoading] = useState<boolean>(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [thermalPrinter, setThermalPrinter] = useState<any>(null); // BluetoothDevice
   const [showPrinterSettings, setShowPrinterSettings] = useState<boolean>(false);
@@ -176,51 +177,51 @@ export default function POSSimulator({
       const customEvt = e as CustomEvent;
       if (showPrinterSettings) {
         setShowPrinterSettings(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showReportPopup) {
         setShowReportPopup(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showCheckoutModal) {
         setShowCheckoutModal(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showCartPopup) {
         setShowCartPopup(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showCatalogModal) {
         setShowCatalogModal(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (selectedMenuForVarian) {
         setSelectedMenuForVarian(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (selectedTransactionForKasir) {
         setSelectedTransactionForKasir(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (confirmDiscardCart) {
         setConfirmDiscardCart(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (confirmDeleteId) {
         setConfirmDeleteId(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (alertMessage) {
         setAlertMessage(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showPrinterWarning) {
         setShowPrinterWarning(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (searchQuery !== '') {
         setSearchQuery('');
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       }
     };
@@ -582,6 +583,7 @@ export default function POSSimulator({
       const url = new URL(config.webAppUrl);
       url.searchParams.append('action', 'get_info_hari_ini');
       url.searchParams.append('id_cabang', activeBranch);
+      url.searchParams.append('tanggal', selectedReportDate);
       
       const res = await fetch(url.toString(), { redirect: 'follow' });
       const data = await res.json();
@@ -1573,9 +1575,9 @@ export default function POSSimulator({
           onTouchEnd={handleTouchEnd}
         >
           {isInitialLoading && (
-            <div className="absolute inset-0 z-50 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center rounded-[24px]">
-              <RefreshCw className="h-8 w-8 text-red-750 animate-spin mb-3" />
-              <p className="text-sm font-bold text-red-900 animate-pulse">Menyinkronkan Data...</p>
+            <div className="py-20 text-center text-zinc-500 bg-white rounded-[32px] border border-zinc-200 shadow-sm flex flex-col items-center justify-center gap-3 animate-pulse">
+              <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
+              <p className="text-sm font-medium text-zinc-600">Memuat data dari sistem pusat...</p>
             </div>
           )}
           {pullDistance > 0 && (
@@ -1590,26 +1592,31 @@ export default function POSSimulator({
               <div className="space-y-3 mb-2 shrink-0">
                 <div className="flex justify-between items-center px-1">
                   <h4 className="text-[13px] font-black text-zinc-800 tracking-tight flex items-center gap-2">Statistik {isToday ? 'Hari Ini' : 'Harian'}</h4>
-                  <div className="relative flex items-center gap-2 bg-white border border-zinc-200 shadow-sm hover:border-zinc-300 transition-all rounded-lg px-2.5 py-1.5 cursor-pointer">
+                  <div className={`relative flex items-center gap-2 bg-white border border-zinc-200 shadow-sm rounded-lg px-2.5 py-1.5 transition-all ${isMetricsLoading ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:border-zinc-300 cursor-pointer'}`}>
                     <Calendar className="h-3.5 w-3.5 text-emerald-650 shrink-0" />
                     <span className="text-[10px] font-extrabold text-zinc-700 tracking-tight">
-                      {new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(selectedReportDate))}
+                      {isMetricsLoading ? "Loading..." : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(selectedReportDate))}
                     </span>
                     <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                     <input 
                       type="date"
                       value={selectedReportDate}
                       max={todayStr}
+                      disabled={isMetricsLoading}
                       onChange={(e) => {
                         if (e.target.value) {
                            if (e.target.value > todayStr) {
                              alert("Tidak bisa memilih tanggal di masa depan.");
                            } else {
+                             setIsMetricsLoading(true);
                              setSelectedReportDate(e.target.value);
+                             setTimeout(() => {
+                               setIsMetricsLoading(false);
+                             }, 800);
                            }
                         }
                       }}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full disabled:cursor-not-allowed"
                     />
                   </div>
                 </div>
@@ -1619,7 +1626,11 @@ export default function POSSimulator({
                     <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-emerald-50"><Banknote className="h-16 w-16" /></div>
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
                        <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-0.5">Total Omset</span>
-                       <p className="text-sm font-black text-emerald-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalRevenue.toLocaleString('id-ID')}</p>
+                       {isMetricsLoading ? (
+                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
+                       ) : (
+                         <p className="text-sm font-black text-emerald-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalRevenue.toLocaleString('id-ID')}</p>
+                       )}
                     </div>
                   </div>
                   <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
@@ -1627,8 +1638,14 @@ export default function POSSimulator({
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
                        <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block mb-0.5">Total Pesanan</span>
                        <div className="flex flex-col gap-0.5 mt-0.5">
-                         <p className="text-lg font-black text-amber-950 tracking-tight leading-none">{todayTxs.length}</p>
-                         <span className="text-[9px] font-bold text-amber-500 uppercase tracking-widest leading-none">Selesai</span>
+                         {isMetricsLoading ? (
+                           <p className="text-xs font-bold text-zinc-400 animate-pulse">Loading...</p>
+                         ) : (
+                           <>
+                             <p className="text-lg font-black text-amber-950 tracking-tight leading-none">{todayTxs.length}</p>
+                             <span className="text-[9px] font-bold text-amber-500 uppercase tracking-widest leading-none">Selesai</span>
+                           </>
+                         )}
                        </div>
                     </div>
                   </div>
@@ -1636,20 +1653,29 @@ export default function POSSimulator({
                     <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-blue-50"><Coins className="h-16 w-16" /></div>
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
                        <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-0.5">Total Cash</span>
-                       <p className="text-sm font-black text-blue-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalCash.toLocaleString('id-ID')}</p>
+                       {isMetricsLoading ? (
+                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
+                       ) : (
+                         <p className="text-sm font-black text-blue-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalCash.toLocaleString('id-ID')}</p>
+                       )}
                     </div>
                   </div>
                   <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
                     <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-fuchsia-50"><CreditCard className="h-16 w-16" /></div>
                     <div className="relative z-10 flex flex-col justify-center h-full pt-1">
                        <span className="text-[10px] font-black text-fuchsia-800 uppercase tracking-widest block mb-0.5">Total Transfer</span>
-                       <p className="text-sm font-black text-fuchsia-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalTransfer.toLocaleString('id-ID')}</p>
+                       {isMetricsLoading ? (
+                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
+                       ) : (
+                         <p className="text-sm font-black text-fuchsia-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalTransfer.toLocaleString('id-ID')}</p>
+                       )}
                     </div>
                   </div>
                 </div>
                 <button
                   onClick={handleOpenReport}
-                  className="w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/60 text-emerald-800 py-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition active:scale-95 shadow-sm mt-3"
+                  disabled={isMetricsLoading}
+                  className={`w-full bg-emerald-50 border border-emerald-200/60 text-emerald-800 py-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition shadow-sm mt-3 ${isMetricsLoading ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-emerald-100 active:scale-95'}`}
                 >
                    <Banknote className="h-4 w-4" /> Laporkan Omset {isToday ? 'Hari Ini' : 'Harian'}
                 </button>

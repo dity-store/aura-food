@@ -92,6 +92,15 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+  const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
+
+  const loginSuggestions = (cabangList || [])
+    .map(c => c.NAMA_CABANG)
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .filter(name => {
+      if (!loginUsername) return true;
+      return name.toUpperCase().includes(loginUsername.toUpperCase()) && name.toUpperCase() !== loginUsername.toUpperCase();
+    });
 
   // Diagnostic states
   const [showDiagnosticModal, setShowDiagnosticModal] = useState<boolean>(false);
@@ -741,11 +750,33 @@ export default function App() {
                     type="text"
                     required
                     disabled={isLoggingIn}
-                    placeholder="CONTOH: PRAYA ATAU MATARAM"
+                    placeholder="Contoh: Praya atau Mataram"
                     value={loginUsername}
+                    autoCapitalize="characters"
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => {
+                      setTimeout(() => setShowSuggestions(false), 200);
+                    }}
                     onChange={(e) => setLoginUsername(e.target.value.toUpperCase())}
-                    className="w-full bg-zinc-50 border border-zinc-200/80 rounded-2xl pl-10 pr-4 py-3 text-xs font-extrabold text-zinc-950 uppercase placeholder:text-zinc-400 placeholder:normal-case focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-750 focus:border-red-750/30 transition shadow-sm disabled:opacity-60"
+                    className="w-full bg-zinc-50 border border-zinc-200/80 rounded-2xl pl-10 pr-4 py-3 text-xs font-extrabold text-zinc-950 focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-750 focus:border-red-750/30 transition shadow-sm disabled:opacity-60 uppercase"
                   />
+                  {showSuggestions && loginSuggestions.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-zinc-200 rounded-2xl shadow-xl z-[1000] max-h-40 overflow-y-auto divide-y divide-zinc-100">
+                      {loginSuggestions.map((name, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onMouseDown={() => {
+                            setLoginUsername(name.toUpperCase());
+                            setShowSuggestions(false);
+                          }}
+                          className="w-full text-left px-4 py-3 text-xs font-black text-red-950 uppercase hover:bg-zinc-50 active:bg-zinc-100 transition cursor-pointer"
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
  

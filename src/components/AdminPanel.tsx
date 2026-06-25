@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Building, 
   UtensilsCrossed, 
@@ -350,28 +351,28 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       const customEvt = e as CustomEvent;
       if (confirmState && confirmState.isOpen) {
         setConfirmState(prev => ({ ...prev, isOpen: false }));
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showFilterModal) {
         setShowFilterModal(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showModal !== null) {
         handleCloseModal();
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (selectedIds.length > 0) {
         setSelectedIds([]);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (isSearchActive) {
         setIsSearchActive(false);
         setSearchQuery('');
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (activeModule !== null) {
         setActiveModule(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       }
     };
@@ -941,6 +942,12 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       formattedItem.nominal = parsed.nominal;
       formattedItem.cabang = parsed.cabang;
       formattedItem.CABANG = parsed.cabang;
+      formattedItem.cash = parsed.cash;
+      formattedItem.CASH = parsed.cash;
+      formattedItem.transfer = parsed.transfer;
+      formattedItem.TRANSFER = parsed.transfer;
+      formattedItem.compliment = parsed.compliment;
+      formattedItem.COMPLIMENT = parsed.compliment;
     }
 
     // Track original properties for cascade update checks
@@ -1131,7 +1138,10 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           JENIS: cleanJenis,
           KETERANGAN: finalFormData.keterangan || finalFormData.KETERANGAN || '',
           DEBIT: derivedTipe === 'Masuk' ? Number(finalFormData.nominal || 0) : 0,
-          KREDIT: derivedTipe === 'Keluar' ? Number(finalFormData.nominal || 0) : 0
+          KREDIT: derivedTipe === 'Keluar' ? Number(finalFormData.nominal || 0) : 0,
+          CASH: Number(finalFormData.cash || 0),
+          TRANSFER: Number(finalFormData.transfer || 0),
+          COMPLIMENT: Number(finalFormData.compliment || 0)
         };
 
         if (isEditing && finalFormData._id_or_original) {
@@ -1153,7 +1163,17 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
           keterangan: payload.KETERANGAN,
           debit: payload.DEBIT,
           kredit: payload.KREDIT,
-          nominal: payload.DEBIT || payload.KREDIT
+          nominal: payload.DEBIT || payload.KREDIT,
+          cash: payload.CASH,
+          CASH: payload.CASH,
+          transfer: payload.TRANSFER,
+          TRANSFER: payload.TRANSFER,
+          compliment: payload.COMPLIMENT,
+          COMPLIMENT: payload.COMPLIMENT,
+          _original: {
+            ...payload,
+            _id_or_original: finalFormData._id_or_original
+          }
         };
 
         let newList = [];
@@ -1408,6 +1428,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
     const debit = Number(rawK.debit || rawK.DEBIT || (Array.isArray(rawK) ? rawK[4] : 0) || 0);
     const kredit = Number(rawK.kredit || rawK.KREDIT || (Array.isArray(rawK) ? rawK[5] : 0) || 0);
     const nominal = Number(rawK.nominal || rawK.debit || rawK.DEBIT || (Array.isArray(rawK) ? rawK[4] : 0) || rawK.kredit || rawK.KREDIT || (Array.isArray(rawK) ? rawK[5] : 0) || 0);
+    const cash = Number(rawK.cash || rawK.CASH || rawK.total_cash || rawK.TOTAL_CASH || rawK.Total_Cash || 0);
+    const transfer = Number(rawK.transfer || rawK.TRANSFER || rawK.total_transfer || rawK.TOTAL_TRANSFER || rawK.Total_Transfer || 0);
+    const compliment = Number(rawK.compliment || rawK.COMPLIMENT || rawK.total_compliment || rawK.TOTAL_COMPLIMENT || rawK.Total_Compliment || 0);
     const tipe = rawK.tipe || '';
     const isDebit = debit > 0 || String(tipe).toLowerCase() === 'masuk' || String(jenis).toLowerCase().includes('pemasukan') || String(jenis).toLowerCase().includes('usaha');
     
@@ -1419,6 +1442,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
       debit,
       kredit,
       nominal,
+      cash,
+      transfer,
+      compliment,
       isDebit,
       tipe,
       _original: rawK
@@ -1753,7 +1779,12 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               className="flex-1 overflow-y-auto p-4 sm:p-6 bg-zinc-50 pb-28 relative"
             >
               
-              {originalListLength > 0 && filteredListLength === 0 ? (
+              {isUniversalLoading ? (
+                <div className="max-w-4xl mx-auto py-20 text-center text-zinc-500 bg-white rounded-[32px] border border-zinc-200 shadow-sm flex flex-col items-center justify-center gap-3 animate-pulse">
+                  <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
+                  <p className="text-sm font-medium text-zinc-600">Memuat data dari sistem pusat...</p>
+                </div>
+              ) : originalListLength > 0 && filteredListLength === 0 ? (
                 <div className="max-w-4xl mx-auto py-16">
                   <div className="flex items-center justify-center flex-col text-zinc-400 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                     <Search className="h-12 w-12 mb-4 opacity-70 text-zinc-300" />
@@ -2093,11 +2124,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                           <div className="flex-1 min-w-0">
                              <div className="flex items-center justify-between">
                                 <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
-                                  {item.NAMA_STAFF}
-                                </h5>
-                                <span className="font-mono bg-zinc-100 border border-zinc-200 text-zinc-650 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0">
-                                  {item.CABANG}
-                                </span>
+                                   {item.NAMA_STAFF}
+                                 </h5>
+                                 <span className="hidden">
+                                   {item.CABANG}
+                                 </span>
                              </div>
                              <div className="flex items-center justify-between mt-1">
                                 <p className="text-[11px] text-zinc-500 font-semibold truncate flex items-center gap-1">
@@ -2375,23 +2406,61 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
                         })()}
                       </datalist>
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5 font-bold">Total Cash</label>
+                        <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
+                          </div>
+                          <input 
+                            type="text" 
+                            inputMode="numeric"
+                            placeholder="0" 
+                            required 
+                            value={formatRupiahInput(formData.cash || '')} 
+                            className="w-full pl-9 pr-3 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none" 
+                            onChange={e => {
+                              const parsedVal = parseRupiahInput(e.target.value);
+                              const currentTransfer = Number(formData.transfer || 0);
+                              setFormData({...formData, cash: parsedVal, nominal: parsedVal + currentTransfer, compliment: 0});
+                            }} 
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5 font-bold">Total Transfer</label>
+                        <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
+                          </div>
+                          <input 
+                            type="text" 
+                            inputMode="numeric"
+                            placeholder="0" 
+                            required 
+                            value={formatRupiahInput(formData.transfer || '')} 
+                            className="w-full pl-9 pr-3 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none" 
+                            onChange={e => {
+                              const parsedVal = parseRupiahInput(e.target.value);
+                              const currentCash = Number(formData.cash || 0);
+                              setFormData({...formData, transfer: parsedVal, nominal: currentCash + parsedVal, compliment: 0});
+                            }} 
+                          />
+                        </div>
+                      </div>
+                    </div>
                     <div>
-                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5 font-bold uppercase text-zinc-500 mb-1.5">Nominal</label>
-                      <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5 font-bold">Total Nominal (Otomatis)</label>
+                      <div className="relative rounded-xl border border-zinc-200 bg-zinc-100 overflow-hidden">
                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                           <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
                         </div>
                         <input 
                           type="text" 
-                          inputMode="numeric"
-                          placeholder="0" 
-                          required 
+                          readOnly
                           value={formatRupiahInput(formData.nominal || formData.DEBIT || formData.KREDIT || '')} 
-                          className="w-full pl-11 pr-4 py-3 bg-transparent text-2xl font-black text-zinc-900 tracking-tight outline-none" 
-                          onChange={e => {
-                            const parsedVal = parseRupiahInput(e.target.value);
-                            setFormData({...formData, nominal: parsedVal});
-                          }} 
+                          className="w-full pl-11 pr-4 py-3 bg-transparent text-xl font-black text-zinc-600 tracking-tight outline-none select-none" 
                         />
                       </div>
                     </div>
@@ -2746,9 +2815,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
         </div>
       )}
 
-      {showFilterModal && (
+      {showFilterModal && createPortal(
         <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm flex justify-end animate-in fade-in duration-200" onClick={() => setShowFilterModal(false)}>
-          <div className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col animate-in slide-in-from-right-1/2" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-sm h-dvh shadow-2xl flex flex-col animate-in slide-in-from-right-1/2" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 pt-safe">
               <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight flex items-center gap-2">
                 <Filter className="h-4 w-4 text-red-700" /> Filter
@@ -2885,7 +2954,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange }
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {toastMessage && (

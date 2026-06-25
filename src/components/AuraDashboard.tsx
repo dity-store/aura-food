@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Transaction } from '../types';
 import { getTransactions, getSyncQueue, getTransactionsFromGAS, getAdminDashboardMetrics, triggerGASSyncRekapHarian } from '../utils/db';
-import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown, Banknote, CreditCard, Gift } from 'lucide-react';
+import { TrendingUp, ShoppingBag, Landmark, Clock, Database, ChevronRight, ChevronDown, Activity, AlertCircle, Sparkles, Filter, X, Search, ArrowLeft, Utensils, Trash2, ReceiptText, RefreshCw, LayoutDashboard, Calendar, Check, Share2, Copy, FileDown, Banknote, CreditCard, Gift, FileText } from 'lucide-react';
 import { getSessionCache, setSessionDashboard, setSessionFilters } from '../utils/sessionCache';
 
 const getTodayLocalDateStr = () => {
@@ -111,11 +111,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       const customEvt = e as CustomEvent;
       if (showLaporModal) {
         setShowLaporModal(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showConfirmRekap) {
         setShowConfirmRekap(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       }
     };
@@ -177,26 +177,24 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
     const currentParamsKey = JSON.stringify({ activeBranch, currentBranch, selectedAdminDate });
 
-    if (!forceRemote && session.dashboard.lastParams === currentParamsKey && session.dashboard.data) {
-      setAdminMetrics(session.dashboard.data);
+    const cached = localStorage.getItem(cacheKey);
+    if (!forceRemote && session.dashboard.lastParams === currentParamsKey && (session.dashboard.data || cached)) {
+      if (session.dashboard.data) {
+         setAdminMetrics(session.dashboard.data);
+      } else if (cached) {
+         try { setAdminMetrics(JSON.parse(cached)); } catch(e){}
+      }
       try {
         const queue = await getSyncQueue();
         setAllQueue(queue);
-      } catch (queueErr) {
-        console.error("Gagal memuat sync queue:", queueErr);
-      }
+      } catch (queueErr) {}
       return;
     }
 
-    if (!forceRemote) {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          setAdminMetrics(JSON.parse(cached));
-        } catch (e) {
-          console.error(e);
-        }
-      }
+    if (!forceRemote && cached) {
+      try {
+        setAdminMetrics(JSON.parse(cached));
+      } catch (e) {}
     }
 
     setLoadingMetrics(true);
@@ -421,45 +419,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     return breakdown;
   };
 
-  const getLaporanText = () => {
-    const dNow = new Date(selectedAdminDate);
-    const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
-    const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-    const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
-    
-    const breakdown = getBranchBreakdown();
-    let breakdownText = "";
-    let rincianPesananText = "";
 
-    breakdown.forEach(b => {
-      breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
-      rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
-      b.txs.forEach((tx, idx) => {
-        let formattedDate = "";
-        try {
-          const d = new Date(tx.timestamp);
-          formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        } catch {
-          formattedDate = selectedAdminDate;
-        }
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        const complimentText = isCompliment ? ' (Compliment)' : '';
-        rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
-      });
-    });
-
-    return `Halo, berikut adalah *Laporan Omset Semua Cabang (Gabungan)*:\n\n` +
-      `*Tanggal:* ${hari}, ${tglText}\n` +
-      `*Total Omset Gabungan:* Rp${(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}\n` +
-      `*Total Cash:* Rp${(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}\n` +
-      `*Total Transfer:* Rp${(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}\n` +
-      `*Total Pesanan Gabungan:* ${(adminMetrics?.totalTransactions || 0)} Selesai\n` +
-      `*Rerata Penjualan:* Rp${(adminMetrics?.averageTransactionValue || 0).toLocaleString('id-ID')}\n\n` +
-      `*Rincian Omset per Cabang:*\n` +
-      breakdownText +
-      rincianPesananText + `\n` +
-      `Terima kasih!`;
-  };
 
   const getRevenueGrowthStyles = () => {
     if (!adminMetrics) return { text: "0%", classes: "text-zinc-500 bg-zinc-50" };
@@ -587,6 +547,64 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     totalItemsSold = transactions.reduce((sum, tx) => sum + (tx.detail?.reduce((s, item) => s + item.QTY, 0) || 0), 0);
   }
 
+  const getLaporanText = () => {
+    const dNow = new Date(selectedAdminDate);
+    const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
+    const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
+    
+    let breakdownText = "";
+    let rincianPesananText = "";
+    
+    const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
+    const cName = currentBranch === 'Semua' ? 'Semua Cabang (Gabungan)' : (cabangList.find(c => String(c.ID_CABANG) === currentBranch)?.NAMA_CABANG || currentBranch);
+    
+    if (currentBranch === 'Semua' && activeBranch === 'ADMIN') {
+      const breakdown = getBranchBreakdown();
+      breakdown.forEach(b => {
+        breakdownText += `- *${b.name}:* Rp${b.revenue.toLocaleString('id-ID')} (${b.txsCount} transaksi)\n`;
+        rincianPesananText += `\n*Rincian Cabang ${b.name}:*\n`;
+        b.txs.forEach((tx, idx) => {
+          let formattedDate = "";
+          try {
+            const d = new Date(tx.timestamp);
+            formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+          } catch {
+            formattedDate = selectedAdminDate;
+          }
+          const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+          const complimentText = isCompliment ? ' (Compliment)' : '';
+          rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
+        });
+      });
+      breakdownText = `*Rincian Omset per Cabang:*\n` + breakdownText;
+    } else {
+      rincianPesananText += `\n*Rincian Transaksi:*\n`;
+      recentTxList.forEach((tx, idx) => {
+        let formattedDate = "";
+        try {
+          const d = new Date(tx.timestamp);
+          formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        } catch {
+          formattedDate = selectedAdminDate;
+        }
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        const complimentText = isCompliment ? ' (Compliment)' : '';
+        rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
+      });
+    }
+
+    return `Halo, berikut adalah *Laporan Omset ${cName}*:\n\n` +
+      `*Tanggal:* ${hari}, ${tglText}\n\n` +
+      `*Total Omset:* Rp${(totalRevenue || 0).toLocaleString('id-ID')}\n` +
+      `  ├ *Total Cash:* Rp${(totalCashVal || 0).toLocaleString('id-ID')}\n` +
+      `  └ *Total Transfer:* Rp${(totalTransferVal || 0).toLocaleString('id-ID')}\n\n` +
+      `*Total Pesanan:* ${(totalTransactionsCount || 0)} Selesai\n\n` +
+      breakdownText +
+      rincianPesananText + `\n` +
+      `Terima kasih!`;
+  };
+
   return (
     <div 
       className="space-y-6 animate-fade-in pb-24 relative"
@@ -601,55 +619,69 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       )}
       <div style={{ marginTop: `${pullDistance / 2}px`, transition: pullDistance === 0 ? 'margin-top 0.2s ease-out' : 'none' }} className="space-y-6">
 
-      {activeBranch === 'ADMIN' && (
-        <div className="bg-white border border-zinc-200/80 px-4 py-3 sm:p-5 rounded-[24px] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-left relative overflow-hidden">
-          <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
-            <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center justify-center">
-              <Activity className="h-4 w-4 sm:h-5 sm:w-5 animate-pulse" />
+      <div className="bg-white border border-zinc-200/80 px-4 py-3 sm:p-5 rounded-[24px] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm text-left relative overflow-hidden">
+        <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
+          <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center justify-center">
+            <Activity className="h-4 w-4 sm:h-5 sm:w-5 animate-pulse" />
+          </div>
+          <div className="flex-1 flex flex-col justify-center">
+            <div className="flex items-center justify-between sm:justify-start gap-3">
+              <h4 className="text-[10px] sm:text-xs font-bold text-zinc-900 uppercase tracking-widest">{activeBranch === 'ADMIN' ? 'Pemantau Multi-Cabang' : 'Dashboard Cabang'}</h4>
+              {activeBranch === 'ADMIN' && (
+                <>
+                  <button
+                    onClick={() => setShowConfirmRekap(true)}
+                    disabled={isTriggeringRekap || loadingMetrics}
+                    className={`flex-none uppercase text-[8px] sm:text-[9px] font-extrabold px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg transition whitespace-nowrap flex items-center justify-center gap-1.5 ${isTriggeringRekap || loadingMetrics ? 'opacity-50 cursor-not-allowed bg-zinc-100 text-zinc-400 border-zinc-200' : 'cursor-pointer active:scale-95 bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200'}`}
+                  >
+                    <Database className={`h-3 w-3 ${isTriggeringRekap ? 'animate-spin' : ''}`} />
+                    {isTriggeringRekap ? 'Memproses...' : 'Rekap Harian'}
+                  </button>
+                  <button
+                    onClick={() => setShowLaporModal(true)}
+                    disabled={loadingMetrics}
+                    className={`flex-none uppercase text-[8px] sm:text-[9px] font-extrabold px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg transition whitespace-nowrap flex items-center justify-center gap-1.5 ${loadingMetrics ? 'opacity-50 cursor-not-allowed bg-zinc-100 text-zinc-400 border-zinc-200' : 'cursor-pointer active:scale-95 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'}`}
+                  >
+                    <FileText className="h-3 w-3" />
+                    Lapor
+                  </button>
+                </>
+              )}
             </div>
-            <div className="flex-1 flex flex-col justify-center">
-              <div className="flex items-center justify-between sm:justify-start gap-3">
-                <h4 className="text-[10px] sm:text-xs font-bold text-zinc-900 uppercase tracking-widest">Pemantau Multi-Cabang</h4>
-                <button
-                  onClick={() => setShowConfirmRekap(true)}
-                  disabled={isTriggeringRekap}
-                  className="flex-none uppercase text-[8px] sm:text-[9px] font-extrabold px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg transition cursor-pointer active:scale-95 whitespace-nowrap flex items-center justify-center gap-1.5 bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200"
-                >
-                  <Database className={`h-3 w-3 ${isTriggeringRekap ? 'animate-spin' : ''}`} />
-                  {isTriggeringRekap ? 'Memproses...' : 'Rekap Harian'}
-                </button>
-              </div>
-              <div className="text-[11px] text-zinc-500 mt-1 leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-1">
-                <div className="relative flex items-center gap-2 bg-zinc-50 border border-zinc-200 hover:border-zinc-350 hover:bg-zinc-100 transition-all rounded-xl px-3 py-1.5 cursor-pointer active:scale-97 overflow-hidden">
-                  <Calendar className="h-3.5 w-3.5 text-red-650 shrink-0" />
-                  <span className="font-extrabold text-zinc-805 tracking-tight group-hover:text-red-750 transition-colors">
-                    {formatIndonesianDate(selectedAdminDate)}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-zinc-450 shrink-0 ml-0.5" />
-                  <input 
-                    type="date"
-                    value={selectedAdminDate}
-                    max={getTodayLocalDateStr()}
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        const todayStr = getTodayLocalDateStr();
-                        if (e.target.value > todayStr) {
-                          alert("Pemberitahuan: Pemantau tidak dapat memilih tanggal di masa depan.");
-                          setSelectedAdminDate(todayStr);
-                        } else {
-                          setSelectedAdminDate(e.target.value);
-                        }
+            <div className="text-[11px] text-zinc-500 mt-1 leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-1">
+              <div className={`relative flex items-center gap-2 bg-zinc-50 border border-zinc-200 hover:border-zinc-350 hover:bg-zinc-100 transition-all rounded-xl px-3 py-1.5 overflow-hidden ${loadingMetrics ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'cursor-pointer active:scale-97'}`}>
+                <Calendar className="h-3.5 w-3.5 text-red-650 shrink-0" />
+                <span className="font-extrabold text-zinc-805 tracking-tight group-hover:text-red-750 transition-colors">
+                  {formatIndonesianDate(selectedAdminDate)}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-zinc-450 shrink-0 ml-0.5" />
+                <input 
+                  type="date"
+                  disabled={loadingMetrics}
+                  value={selectedAdminDate}
+                  max={getTodayLocalDateStr()}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const todayStr = getTodayLocalDateStr();
+                      if (e.target.value > todayStr) {
+                        alert("Pemberitahuan: Pemantau tidak dapat memilih tanggal di masa depan.");
+                        setSelectedAdminDate(todayStr);
+                      } else {
+                        setSelectedAdminDate(e.target.value);
                       }
-                    }}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  />
-                </div>
+                    }
+                  }}
+                  className={`absolute inset-0 opacity-0 w-full h-full ${loadingMetrics ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                />
               </div>
             </div>
           </div>
-          <div className="flex gap-2 self-stretch sm:self-auto shrink-0 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide w-full sm:w-auto">
+        </div>
+        {activeBranch === 'ADMIN' && (
+          <div className={`flex gap-2 self-stretch sm:self-auto shrink-0 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide w-full sm:w-auto ${loadingMetrics ? 'opacity-60 pointer-events-none' : ''}`}>
             <button
               onClick={() => setSelectedAdminBranch('Semua')}
+              disabled={loadingMetrics}
               className={`flex-none uppercase text-[9px] font-extrabold px-3 py-2 sm:px-4 sm:py-2.5 rounded-lg transition cursor-pointer active:scale-95 ${
                 selectedAdminBranch === 'Semua'
                   ? 'bg-red-600 text-white shadow-md'
@@ -662,7 +694,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               <button
                 key={c.ID_CABANG}
                 onClick={() => setSelectedAdminBranch(String(c.ID_CABANG))}
-                className={`flex-none uppercase text-[9px] font-extrabold px-3 py-2 sm:px-4 sm:py-2.5 rounded-lg transition cursor-pointer active:scale-95 whitespace-nowrap ${
+                disabled={loadingMetrics}
+                className={`flex-none uppercase text-[9px] font-extrabold px-3 py-2 sm:px-4 sm:py-2.5 rounded-lg transition whitespace-nowrap cursor-pointer active:scale-95 ${
                   selectedAdminBranch === String(c.ID_CABANG)
                     ? 'bg-red-600 text-white shadow-md'
                     : 'bg-zinc-50 hover:bg-zinc-100 text-zinc-600 border border-zinc-200'
@@ -672,8 +705,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               </button>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* METRICS BENTO GRID */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
@@ -952,7 +985,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 font-sans">
               <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
-                Laporan Semua Cabang
+                {currentBranchFilter === 'Semua' ? 'Laporan Semua Cabang' : `Laporan Omset ${cabangList.find(c => String(c.ID_CABANG) === currentBranchFilter)?.NAMA_CABANG || currentBranchFilter}`}
               </h3>
               <button 
                 onClick={() => setShowLaporModal(false)}
@@ -966,7 +999,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                 <div className="absolute top-0 right-0 p-3 opacity-10"><Landmark className="w-20 h-20 text-emerald-500" /></div>
                 <div className="relative z-10 space-y-4">
                   <p className="text-xs text-zinc-800 leading-relaxed font-black uppercase tracking-wider">
-                    Laporan Omset Semua Cabang
+                    {currentBranchFilter === 'Semua' ? 'Laporan Omset Semua Cabang' : `Laporan Omset Cabang ${cabangList.find(c => String(c.ID_CABANG) === currentBranchFilter)?.NAMA_CABANG || currentBranchFilter}`}
                   </p>
                   
                   <div className="space-y-2 mt-2 bg-white/80 p-3 rounded-xl border border-emerald-150 backdrop-blur-sm text-left">
@@ -976,71 +1009,104 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                     </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2">
                       <TrendingUp className="h-3.5 w-3.5 text-emerald-600" /> 
-                      <span><b className="text-zinc-900 font-extrabold">Total Omset Gabungan:</b> Rp{(adminMetrics?.totalRevenue || 0).toLocaleString('id-ID')}</span>
+                      <span><b className="text-zinc-900 font-extrabold">{currentBranchFilter === 'Semua' ? 'Total Omset Gabungan:' : 'Total Omset:'}</b> Rp{(totalRevenue || 0).toLocaleString('id-ID')}</span>
                     </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2 pl-[22px]">
-                      <span><b className="text-zinc-900 font-bold">Total Cash:</b> Rp{(adminMetrics?.totalCash || 0).toLocaleString('id-ID')}</span>
+                      <span><b className="text-zinc-900 font-bold">Total Cash:</b> Rp{(totalCashVal || 0).toLocaleString('id-ID')}</span>
                     </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2 pl-[22px]">
-                      <span><b className="text-zinc-900 font-bold">Total Transfer:</b> Rp{(adminMetrics?.totalTransfer || 0).toLocaleString('id-ID')}</span>
+                      <span><b className="text-zinc-900 font-bold">Total Transfer:</b> Rp{(totalTransferVal || 0).toLocaleString('id-ID')}</span>
                     </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2">
                       <ShoppingBag className="h-3.5 w-3.5 text-zinc-500" /> 
-                      <span><b className="text-zinc-900 font-extrabold">Total Pesanan:</b> {adminMetrics?.totalTransactions || 0} Selesai</span>
+                      <span><b className="text-zinc-900 font-extrabold">Total Pesanan:</b> {totalTransactionsCount || 0} Selesai</span>
                     </p>
                   </div>
 
-                  {/* Per Branch Breakdown */}
-                  <div className="space-y-2 bg-white p-3 rounded-xl border border-emerald-150 text-left">
-                    <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Rincian Omset per Cabang</p>
-                    <div className="space-y-1.5 pt-1">
+                  {currentBranchFilter === 'Semua' && (
+                    <div className="space-y-2 bg-white p-3 rounded-xl border border-emerald-150 text-left">
+                      <p className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Rincian Omset per Cabang</p>
+                      <div className="space-y-1.5 pt-1">
+                        {getBranchBreakdown().map(b => (
+                          <div key={b.id} className="text-xs text-zinc-750 flex justify-between items-center border-b border-zinc-100 pb-1 last:border-0 last:pb-0">
+                            <span className="font-semibold text-zinc-900">{b.name}</span>
+                            <span className="font-black text-emerald-600">
+                              Rp{b.revenue.toLocaleString('id-ID')}{' '}
+                              <span className="text-[10px] text-zinc-400 font-normal">({b.txsCount} tx)</span>
+                            </span>
+                          </div>
+                        ))}
+                        {getBranchBreakdown().length === 0 && (
+                          <p className="text-xs text-zinc-400 italic">Tidak ada rincian omset cabang</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {currentBranchFilter === 'Semua' ? (
+                    <div className="space-y-3">
                       {getBranchBreakdown().map(b => (
-                        <div key={b.id} className="text-xs text-zinc-750 flex justify-between items-center border-b border-zinc-100 pb-1 last:border-0 last:pb-0">
-                          <span className="font-semibold text-zinc-900">{b.name}</span>
-                          <span className="font-black text-emerald-600">
-                            Rp{b.revenue.toLocaleString('id-ID')}{' '}
-                            <span className="text-[10px] text-zinc-400 font-normal">({b.txsCount} tx)</span>
-                          </span>
+                        <div key={b.id} className="bg-white p-3 rounded-xl border border-zinc-200 text-left space-y-2">
+                          <p className="text-[11px] font-black text-zinc-850 uppercase tracking-tight">
+                            Rincian Cabang {b.name}:
+                          </p>
+                          <div className="space-y-1.5 text-[10px] font-mono text-zinc-650">
+                            {b.txs.map((tx, idx) => {
+                              let formattedDate = "";
+                              try {
+                                const d = new Date(tx.timestamp);
+                                formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                              } catch {
+                                formattedDate = selectedAdminDate;
+                              }
+                              const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+                              return (
+                                <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
+                                  <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
+                                  <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                                </div>
+                              );
+                            })}
+                            {b.txs.length === 0 && (
+                              <p className="text-zinc-400 italic">Tidak ada pesanan</p>
+                            )}
+                          </div>
                         </div>
                       ))}
-                      {getBranchBreakdown().length === 0 && (
-                        <p className="text-xs text-zinc-400 italic">Tidak ada rincian omset cabang</p>
-                      )}
                     </div>
-                  </div>
-
-                  {/* Detailed Orders Grouped by Branch */}
-                  <div className="space-y-3">
-                    {getBranchBreakdown().map(b => (
-                      <div key={b.id} className="bg-white p-3 rounded-xl border border-zinc-200 text-left space-y-2">
-                        <p className="text-[11px] font-black text-zinc-850 uppercase tracking-tight">
-                          Rincian Cabang {b.name}:
-                        </p>
-                        <div className="space-y-1.5 text-[10px] font-mono text-zinc-650">
-                          {b.txs.map((tx, idx) => {
-                            let formattedDate = "";
-                            try {
-                              const d = new Date(tx.timestamp);
-                              formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-                            } catch {
-                              formattedDate = selectedAdminDate;
-                            }
-                            const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-                            return (
-                              <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
-                                <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
-                                <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
-                              </div>
-                            );
-                          })}
-                          {b.txs.length === 0 && (
-                            <p className="text-zinc-400 italic">Tidak ada pesanan</p>
-                          )}
-                        </div>
+                  ) : (
+                    <div className="bg-white p-3 rounded-xl border border-zinc-200 text-left space-y-2">
+                      <p className="text-[11px] font-black text-zinc-850 uppercase tracking-tight">
+                        Rincian Transaksi:
+                      </p>
+                      <div className="space-y-1.5 text-[10px] font-mono text-zinc-650">
+                        {recentTxList.map((tx, idx) => {
+                          let formattedDate = "";
+                          try {
+                            const d = new Date(tx.timestamp);
+                            formattedDate = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                          } catch {
+                            formattedDate = selectedAdminDate;
+                          }
+                          const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+                          return (
+                            <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
+                              <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
+                              <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                            </div>
+                          );
+                        })}
+                        {recentTxList.length === 0 && (
+                          <p className="text-zinc-400 italic">Tidak ada pesanan</p>
+                        )}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  )}
 
+                  <p className="text-[10px] font-black uppercase text-zinc-500 mb-2 pl-1 mt-4 border-t border-emerald-100/50 pt-3">Pratinjau Salinan (WhatsApp):</p>
+                  <div className="bg-white border border-zinc-200/60 p-4 rounded-xl relative max-h-[200px] overflow-y-auto font-mono text-[9px] text-zinc-600 leading-relaxed whitespace-pre-wrap shadow-inner">
+                    {getLaporanText()}
+                  </div>
                 </div>
               </div>
             </div>

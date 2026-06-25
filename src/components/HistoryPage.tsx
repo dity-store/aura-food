@@ -73,16 +73,16 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
       const customEvt = e as CustomEvent;
       if (historyModalTx !== null) {
         setHistoryModalTx(null);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (showHistoryFilter) {
         setShowHistoryFilter(false);
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       } else if (isSearchHistoryActive) {
         setIsSearchHistoryActive(false);
         setHistorySearchQuery('');
-        customEvt.detail.handled = true;
+        if (customEvt.detail) customEvt.detail.handled = true;
         customEvt.preventDefault();
       }
     };
@@ -335,15 +335,6 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
         onTouchEnd={handleTouchEnd}
         className="flex-1 overflow-y-auto w-full pb-safe bg-neutral-50 relative selection:bg-red-100 selection:text-red-900"
       >
-        {isFetchingHistory && (
-          <div className="absolute inset-0 z-[60] bg-white/50 backdrop-blur-[2px] flex flex-col items-center justify-center">
-             <div className="bg-white p-6 rounded-3xl border border-zinc-200/60 shadow-xl flex flex-col items-center gap-3 animate-in fade-in zoom-in-95">
-                <RefreshCw className="h-8 w-8 text-red-750 animate-spin" />
-                <p className="text-xs font-bold text-zinc-700 uppercase tracking-widest animate-pulse">Menghubungkan Data...</p>
-             </div>
-          </div>
-        )}
-        
         {pullDistance > 0 && (
           <div className="absolute top-4 left-0 right-0 flex justify-center items-center h-12 z-50">
             <RefreshCw className={`h-6 w-6 text-red-750 animate-spin`} style={{ opacity: pullDistance / 100 }} />
@@ -354,7 +345,12 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
           className="max-w-2xl mx-auto p-4 space-y-3"
           style={{ marginTop: `${pullDistance / 2}px`, transition: pullDistance === 0 ? 'margin-top 0.2s ease-out' : 'none' }}
         >
-            {history.length === 0 ? (
+            {isFetchingHistory && history.length === 0 ? (
+                <div className="py-20 text-center text-zinc-500 bg-white rounded-[32px] border border-zinc-200 shadow-sm flex flex-col items-center justify-center gap-3 animate-pulse">
+                  <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
+                  <p className="text-sm font-medium text-zinc-600">Memuat data dari sistem pusat...</p>
+                </div>
+            ) : history.length === 0 ? (
                 <div className="flex items-center justify-center flex-col text-zinc-400 py-20 text-center bg-white rounded-[32px] border border-zinc-200 border-dashed p-8 shadow-sm">
                   <ReceiptText className="h-14 w-14 mb-4 opacity-70 text-zinc-300" />
                   <p className="text-sm font-black text-zinc-700 uppercase tracking-widest">Riwayat Kosong</p>
@@ -448,9 +444,9 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
         </div>
       </main>
 
-      {showHistoryFilter && (
+      {showHistoryFilter && createPortal(
         <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm flex justify-end animate-in fade-in duration-200" onClick={() => setShowHistoryFilter(false)}>
-          <div className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col animate-in slide-in-from-right-1/2" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-sm h-dvh shadow-2xl flex flex-col animate-in slide-in-from-right-1/2" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 pt-safe">
               <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight flex items-center gap-2">
                 <Filter className="h-4 w-4 text-red-750" /> Filter Riwayat
@@ -568,7 +564,8 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {historyModalTx && createPortal(
         <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm transition-all duration-200" onClick={() => setHistoryModalTx(null)}>
