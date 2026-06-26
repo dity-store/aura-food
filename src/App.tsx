@@ -9,7 +9,15 @@ import ReceiptThermal from './components/ReceiptThermal';
 import HistoryPage from './components/HistoryPage';
 import RekapOperasionalPanel from './components/RekapOperasionalPanel';
 import { Transaction, Cabang } from './types';
-import { getTransactions, seedMasterDataIfEmpty, getMasterData, processSyncQueue, syncMasterDataFromGAS, saveMasterData } from './utils/db';
+import { 
+  getTransactions, 
+  seedMasterDataIfEmpty, 
+  getMasterData, 
+  processSyncQueue, 
+  syncMasterDataFromGAS, 
+  saveMasterData,
+  getTransactionsFromGAS
+} from './utils/db';
 import { printReceipt } from './utils/pdf';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -864,6 +872,7 @@ export default function App() {
                   onNavigateToAdmin={() => setActiveTab('admin')} 
                   activeBranch={activeBranch}
                   cabangList={cabangList}
+                  initialTransactions={recentTransactions}
                   onNavigateToHistory={(branch) => {
                     if (typeof branch === 'string' && branch && branch !== 'Semua') {
                       setHistoryBranchFilter(branch);
@@ -872,11 +881,34 @@ export default function App() {
                     }
                     setActiveTab('history');
                   }}
-                  onSelectTransaction={(tx) => {
-                    setSelectedTx(tx);
-                    // scroll to view after a short delay
+                  onSelectTransaction={async (tx) => {
+                    if (!tx) return;
+                    
+                    let fullTx = tx;
+                    // If detail is missing, try to find the full transaction object
+                    if (!tx.detail || tx.detail.length === 0) {
+                      const localFull = recentTransactions.find(t => t.id === tx.id);
+                      if (localFull) {
+                        fullTx = localFull;
+                      } else {
+                        try {
+                          const remoteTxs = await getTransactionsFromGAS(tx.id);
+                          if (remoteTxs && remoteTxs.length > 0) {
+                            fullTx = remoteTxs[0];
+                          }
+                        } catch (e) {
+                          console.warn("Could not fetch full tx details", e);
+                        }
+                      }
+                    }
+                    
+                    setSelectedTx(fullTx);
+                    // scroll to view after a short delay to allow mounting
                     setTimeout(() => {
-                      document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' });
+                      const el = document.getElementById('thermal-section');
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
                     }, 100);
                   }}
                 />
@@ -924,7 +956,7 @@ export default function App() {
                      setPosInitialCreateMode(true);
                      setActiveTab('pos');
                    }}
-                   onSuccessPrint={async (tx) => {
+                   onSuccessPrint={async (tx: any) => {
                      if (!tx) return;
                      try {
                        setPrintingStatus('printing');
@@ -933,7 +965,6 @@ export default function App() {
                        await printReceipt(tx, activeBranch);
                        setPrintingStatus('success');
                        setTimeout(() => setPrintingStatus('idle'), 3000);
-                       alert('Struk Berhasil Dicetak & Disimpan');
                      } catch (err) {
                        console.error(err);
                        setPrintingStatus('idle');
@@ -943,15 +974,10 @@ export default function App() {
                    onSelectTransaction={async (tx) => {
                      if (!tx) return;
                      setSelectedTx(tx);
-                     if (activeBranch !== 'ADMIN') {
-                       setActiveTab('pos');
-                     } else {
-                       setActiveTab('dashboard');
-                       setTimeout(() => {
-                         document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' });
-                       }, 100);
-                     }
-                   }}
+                      setTimeout(() => {
+                        document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' });
+                      }, 100);
+                    }}
                  />
               </div>
             )}
@@ -1052,10 +1078,20 @@ export default function App() {
                              disabled={printingStatus === 'printing'}
                              onClick={async () => {
                                if (!selectedTx) return;
-                               setPrintingStatus('printing');
-                               await printReceipt(selectedTx, activeBranch);
-                               setPrintingStatus('success');
-                               setTimeout(() => setPrintingStatus('idle'), 3000);
+                               try {
+                                 setPrintingStatus('printing');
+                                 const { markTransactionAsPrinted } = await import('./utils/db');
+                                 markTransactionAsPrinted(selectedTx.id);
+                                 await printReceipt(selectedTx, activeBranch);
+                                 setPrintingStatus('success');
+                                 setTimeout(() => {
+                                   setPrintingStatus('idle');
+                                   setSelectedTx(null);
+                                 }, 2000);
+                               } catch (err) {
+                                 setPrintingStatus('idle');
+                                 alert('Gagal mencetak struk. Periksa koneksi printer Anda.');
+                               }
                              }}
                              className={`w-full text-white font-extrabold text-xs py-4 rounded-2xl transition flex items-center justify-center shadow-lg active:scale-95 uppercase tracking-widest cursor-pointer gap-3 ${
                                printingStatus === 'printing' 
