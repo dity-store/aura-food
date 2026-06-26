@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -91,6 +91,21 @@ export default function POSSimulator({
 }: POSSimulatorProps) {
   const [masterData, setMasterData] = useState<MasterData | null>(null);
   
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  
+  const triggerSync = async () => {
+    if (!navigator.onLine) return;
+    setIsSyncing(true);
+    try {
+      await processSyncQueue();
+      await loadDataFromDB();
+    } catch (err) {
+      console.error("Sync error:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const activeBranchObj = React.useMemo(() => {
     return masterData?.cabang?.find(x => String(x.ID_CABANG) === String(activeBranch));
   }, [masterData, activeBranch]);
@@ -115,7 +130,6 @@ export default function POSSimulator({
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [pendingQueue, setPendingQueue] = useState<SyncQueueItem[]>([]);
   const [syncLogs, setSyncLogs] = useState<string[]>([]);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isCreatingTx, setIsCreatingTx] = useState<boolean>(initialCreateMode || false);
 
   useEffect(() => {
@@ -149,7 +163,15 @@ export default function POSSimulator({
   const [autoPrint, setAutoPrint] = useState(true);
   const [selectedMenuForVarian, setSelectedMenuForVarian] = useState<Menu | null>(null);
   const [selectedTransactionForKasir, setSelectedTransactionForKasir] = useState<Transaction | null>(null);
+  const [previewType, setPreviewType] = useState<'inline' | 'popup'>('popup');
   const [showCartPopup, setShowCartPopup] = useState<boolean>(false);
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (selectedTransactionForKasir && previewType === 'inline' && previewRef.current) {
+      previewRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [selectedTransactionForKasir, previewType]);
   
   // Pull to refresh
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -288,6 +310,7 @@ export default function POSSimulator({
 
   useEffect(() => {
     if (selectedTransaction) {
+      setPreviewType('popup');
       setSelectedTransactionForKasir(selectedTransaction);
     }
   }, [selectedTransaction]);
@@ -309,8 +332,15 @@ export default function POSSimulator({
       setMasterData(dbMaster);
 
       let allHistory = await getTransactions();
+      const branchHistory = activeBranch === 'ADMIN' ? allHistory : allHistory.filter(tx => String(tx.cabang) === String(activeBranch));
       
-      if (navigator.onLine && activeBranch && activeBranch !== 'ADMIN' && forceRemote) {
+      // If branchHistory is empty, force remote fetch to ensure data is populated
+      let shouldForce = forceRemote;
+      if (!shouldForce && branchHistory.length === 0 && activeBranch && activeBranch !== 'ADMIN') {
+          shouldForce = true;
+      }
+      
+      if (navigator.onLine && activeBranch && activeBranch !== 'ADMIN' && shouldForce) {
         try {
             const dateObj = new Date();
             const yearStr = dateObj.getFullYear();
@@ -334,8 +364,8 @@ export default function POSSimulator({
         }
       }
       
-      const branchHistory = activeBranch === 'ADMIN' ? allHistory : allHistory.filter(tx => String(tx.cabang) === String(activeBranch));
-      setHistory(branchHistory.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+      const updatedBranchHistory = activeBranch === 'ADMIN' ? allHistory : allHistory.filter(tx => String(tx.cabang) === String(activeBranch));
+      setHistory(updatedBranchHistory.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
 
       const dbQueue = await getSyncQueue();
       const branchQueue = activeBranch === 'ADMIN' ? dbQueue : dbQueue.filter(item => String(item.payload?.cabang) === String(activeBranch));
@@ -355,7 +385,7 @@ export default function POSSimulator({
     loadDataFromDB(shouldFetchRemote);
     const handleOnline = () => {
       setIsOnline(true);
-      processSyncQueue().then(() => loadDataFromDB());
+      triggerSync();
     };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -711,7 +741,7 @@ export default function POSSimulator({
       });
 
       if (navigator.onLine) {
-        processSyncQueue().then(() => loadDataFromDB());
+        triggerSync();
       }
 
       confetti({
@@ -1093,6 +1123,16 @@ export default function POSSimulator({
               <div className="p-4 flex-1 overflow-hidden min-h-0 pb-16">
                 {renderCatalogGrid()}
               </div>
+            </div>
+          </div>
+        )}
+
+        {isSyncing && (
+          <div style={{ zIndex: 10000002 }} className="fixed bottom-6 right-6 flex items-center gap-3 bg-zinc-900/90 text-white px-5 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-5 duration-300 backdrop-blur-md border border-zinc-700/50">
+            <RefreshCw className="h-5 w-5 animate-spin text-emerald-400" />
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">Sinkronisasi</span>
+              <span className="text-[9px] font-medium text-zinc-300">Mengirim data ke Cloud...</span>
             </div>
           </div>
         )}
@@ -1603,16 +1643,43 @@ export default function POSSimulator({
                       value={selectedReportDate}
                       max={todayStr}
                       disabled={isMetricsLoading}
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         if (e.target.value) {
                            if (e.target.value > todayStr) {
                              alert("Tidak bisa memilih tanggal di masa depan.");
                            } else {
                              setIsMetricsLoading(true);
                              setSelectedReportDate(e.target.value);
-                             setTimeout(() => {
-                               setIsMetricsLoading(false);
-                             }, 800);
+                             
+                             // Try to fetch data for this date if not available locally
+                             try {
+                                const allHistory = await getTransactions();
+                                const filtered = allHistory.filter(tx => {
+                                   const d = new Date(tx.timestamp);
+                                   const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                                   return dStr === e.target.value;
+                                });
+
+                                if (filtered.length === 0) {
+                                    // Fetch remote
+                                    const dateObj = new Date(e.target.value);
+                                    const yearStr = dateObj.getFullYear();
+                                    const monthStr = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                    const dayStr = String(dateObj.getDate()).padStart(2, '0');
+                                    const paramTanggal = `${dayStr}/${monthStr}/${yearStr}`;
+                                    const remoteHistory = await getTransactionsFromGAS(activeBranch, paramTanggal);
+                                    for (const tx of remoteHistory) {
+                                        await saveTransaction(tx);
+                                    }
+                                    const updatedHistory = await getTransactions();
+                                    const branchHistory = activeBranch === 'ADMIN' ? updatedHistory : updatedHistory.filter(tx => String(tx.cabang) === String(activeBranch));
+                                    setHistory(branchHistory.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+                                }
+                             } catch (err) {
+                                console.error("Error fetching remote transactions for date", err);
+                             }
+
+                             setIsMetricsLoading(false);
                            }
                         }
                       }}
@@ -1733,54 +1800,92 @@ export default function POSSimulator({
                   </button>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2.5">
-                  {history.slice(0, 3).map((tx) => (
-                    <div
-                      key={tx.id}
-                      className={`p-4 border rounded-2xl transition flex flex-col justify-between text-left group ${
-                        selectedTransaction?.id === tx.id 
-                          ? 'bg-red-50 border-red-700 ring-1 ring-red-700/10' 
-                          : 'border-zinc-200/80 hover:border-zinc-400 bg-white hover:bg-zinc-50/20'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <p className={`text-xs font-extrabold truncate flex items-center gap-1.5 ${selectedTransaction?.id === tx.id ? 'text-red-800' : 'text-zinc-900'}`}>
-                          {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
-                            <Gift className="h-3.5 w-3.5 text-amber-500 animate-pulse fill-amber-100 shrink-0" />
-                          ) : (
-                            <ReceiptText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                          )}
-                          {tx.id}
-                        </p>
-                        <span className={`px-2 py-0.5 rounded text-[8px] font-black shrink-0 uppercase tracking-wider ${
-                          tx.status === 'synced' 
-                            ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/30' 
-                            : 'bg-amber-100/70 text-amber-800 border border-amber-200/30'
-                        }`}>
-                          {tx.status === 'synced' ? 'Online' : 'Offline'}
-                        </span>
-                      </div>
+                <>
+                  <div className="flex flex-col gap-2.5">
+                    {history.slice(0, 3).map((tx) => (
+                      <div
+                        key={tx.id}
+                        className="flex flex-col gap-2"
+                      >
+                        <div
+                          onClick={() => {
+                            if (selectedTransactionForKasir?.id === tx.id) {
+                              setSelectedTransactionForKasir(null);
+                            } else {
+                              setSelectedTransactionForKasir(tx);
+                              setPreviewType('inline');
+                            }
+                          }}
+                          className={`p-4 border rounded-2xl transition flex flex-col justify-between text-left group cursor-pointer ${
+                            selectedTransactionForKasir?.id === tx.id 
+                              ? 'bg-red-50 border-red-700 ring-1 ring-red-700/10' 
+                              : 'border-zinc-200/80 hover:border-zinc-400 bg-white hover:bg-zinc-50/20'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start">
+                            <p className={`text-xs font-extrabold truncate flex items-center gap-1.5 ${selectedTransaction?.id === tx.id ? 'text-red-800' : 'text-zinc-900'}`}>
+                              {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
+                                <Gift className="h-3.5 w-3.5 text-amber-500 animate-pulse fill-amber-100 shrink-0" />
+                              ) : (
+                                <ReceiptText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                              )}
+                              {tx.id}
+                            </p>
+                            <span className={`px-2 py-0.5 rounded text-[8px] font-black shrink-0 uppercase tracking-wider ${
+                              tx.status === 'synced' 
+                                ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/30' 
+                                : 'bg-amber-100/70 text-amber-800 border border-amber-200/30'
+                            }`}>
+                              {tx.status === 'synced' ? 'Online' : 'Offline'}
+                            </span>
+                          </div>
 
-                      <div className="flex justify-between items-end mt-2">
-                        <div className="leading-tight">
-                          <p className="text-[10px] text-zinc-500 font-medium">
-                            {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
-                          </p>
+                          <div className="flex justify-between items-end mt-2">
+                            <div className="leading-tight">
+                              <p className="text-[10px] text-zinc-500 font-medium">
+                                {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
+                              </p>
+                            </div>
+                            <p className="text-sm font-black text-zinc-950">
+                              Rp{tx.totalAmount.toLocaleString('id-ID')}
+                            </p>
+                          </div>
                         </div>
-                        <p className="text-sm font-black text-zinc-950">
-                          Rp{tx.totalAmount.toLocaleString('id-ID')}
-                        </p>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>
         </div>
 
+        {selectedTransactionForKasir && previewType === 'inline' && (
+          <div ref={previewRef} className="mt-8 w-full bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm animate-in zoom-in-95 duration-300">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-zinc-900 text-sm">Pratinjau Struk</h3>
+              <button 
+                onClick={() => setSelectedTransactionForKasir(null)}
+                className="bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-lg text-xs font-bold"
+              >
+                Tutup
+              </button>
+            </div>
+            <div className="p-4 bg-white rounded-lg flex justify-center mb-4">
+                <ReceiptThermal 
+                  transaction={selectedTransactionForKasir} 
+                  branchName={derivedBranchName} 
+                  branchLocation={masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(selectedTransactionForKasir.cabang))?.LOKASI}
+                />
+            </div>
+            <button className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" onClick={() => printReceiptAndUpload(selectedTransactionForKasir)}>
+                Cetak Struk Sekarang
+            </button>
+          </div>
+        )}
+
         {/* Modal Pratinjau Struk untuk Kasir */}
-        {selectedTransactionForKasir && (
+        {selectedTransactionForKasir && previewType === 'popup' && (
           <div className="fixed inset-0 z-[1000] bg-zinc-950/60 backdrop-blur-sm flex justify-center items-end p-4 animate-in fade-in duration-200" onClick={() => { setSelectedTransactionForKasir(null); onSelectTransaction(null); }}>
             <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 font-sans">
