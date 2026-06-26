@@ -40,11 +40,20 @@ interface AuraDashboardProps {
   activeBranch: string;
   onSelectTransaction?: (tx: Transaction) => void;
   cabangList: any[];
+  initialTransactions?: Transaction[];
 }
 
-export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNavigateToHistory, activeBranch, onSelectTransaction, cabangList }: AuraDashboardProps) {
+export default function AuraDashboard({ 
+  onNavigateToPOS, 
+  onNavigateToAdmin, 
+  onNavigateToHistory, 
+  activeBranch, 
+  onSelectTransaction, 
+  cabangList,
+  initialTransactions = []
+}: AuraDashboardProps) {
   const session = getSessionCache();
-  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>(initialTransactions);
   const [allQueue, setAllQueue] = useState<any[]>([]);
   
   // Initialize filter from session cache or localStorage or default
@@ -61,6 +70,40 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   
   // Setup cache key helper
   const getCacheKey = (branch: string, date: string) => `cached_dashboard_metrics_${branch}_${date}`;
+
+  // Robust date parsing helper that correctly handles DD/MM/YYYY or YYYY-MM-DD formats
+  const checkTxDateMatch = (txDateRaw: any, targetDateStr: string) => {
+    if (!txDateRaw) return false;
+    try {
+      let parsedDateStr = '';
+      if (typeof txDateRaw === 'string') {
+        if (txDateRaw.includes('T')) {
+          parsedDateStr = txDateRaw.substring(0, 10);
+        } else {
+          const p = txDateRaw.split(' ')[0].split(/[\/\-]/);
+          if (p.length === 3) {
+            if (p[2].length === 4) {
+              parsedDateStr = `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+            } else if (p[0].length === 4) {
+              parsedDateStr = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+            }
+          }
+          if (!parsedDateStr) {
+            const d = new Date(txDateRaw);
+            if (!isNaN(d.getTime())) {
+              parsedDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            }
+          }
+        }
+      } else if (txDateRaw instanceof Date || (typeof txDateRaw === 'number' && !isNaN(txDateRaw))) {
+        const d = new Date(txDateRaw);
+        parsedDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+      return parsedDateStr === targetDateStr;
+    } catch {
+      return false;
+    }
+  };
 
   // States for server-side admin metrics loaded from cache immediately
   const [adminMetrics, setAdminMetrics] = useState<{
@@ -189,6 +232,15 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const cacheKey = getCacheKey(currentBranch, selectedAdminDate);
     const currentParamsKey = JSON.stringify({ activeBranch, currentBranch, selectedAdminDate });
 
+    // For non-admin (cashiers), we ALWAYS want to refresh allTransactions from local DB to support date filtering
+    // and ensuring "Riwayat Transaksi Terakhir" works correctly.
+    if (activeBranch !== 'ADMIN') {
+      try {
+        const txsLocal = await getTransactions();
+        setAllTransactions(txsLocal);
+      } catch (err) {}
+    }
+
     const cached = localStorage.getItem(cacheKey);
     if (!forceRemote && session.dashboard.lastParams === currentParamsKey && (session.dashboard.data || cached)) {
       if (session.dashboard.data) {
@@ -244,12 +296,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               return false;
             }
             try {
-              if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
-                return tx.timestamp.substring(0, 10) === currentDateStr;
-              }
-              const d = new Date(tx.timestamp);
-              const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-              return dStr === currentDateStr;
+              return checkTxDateMatch(tx.timestamp, currentDateStr);
             } catch {
               return false;
             }
@@ -294,9 +341,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                 return false;
               }
               try {
-                const d = new Date(tx.timestamp);
-                const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                return dStr === yesterdayDateStr;
+                return checkTxDateMatch(tx.timestamp, yesterdayDateStr);
               } catch { return false; }
             });
             yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => {
@@ -369,12 +414,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
             return false;
           }
           try {
-            if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
-              return tx.timestamp.substring(0, 10) === currentDateStr;
-            }
-            const d = new Date(tx.timestamp);
-            const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-            return dStr === currentDateStr;
+            return checkTxDateMatch(tx.timestamp, currentDateStr);
           } catch {
             return false;
           }
@@ -414,20 +454,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           const yesterdayDateStr = `${yr}-${mo}-${dy}`;
           
           const yesterdayTransactions = currentBranch === 'Semua'
-            ? unique.filter(tx => {
-                try {
-                  const d = new Date(tx.timestamp);
-                  const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                  return dStr === yesterdayDateStr;
-                } catch { return false; }
-              })
-            : unique.filter(tx => String(tx.cabang) === String(currentBranch) && (() => {
-                try {
-                  const d = new Date(tx.timestamp);
-                  const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                  return dStr === yesterdayDateStr;
-                } catch { return false; }
-              })());
+            ? unique.filter(tx => checkTxDateMatch(tx.timestamp, yesterdayDateStr))
+            : unique.filter(tx => String(tx.cabang) === String(currentBranch) && checkTxDateMatch(tx.timestamp, yesterdayDateStr));
           yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => {
             const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
             if (isCompliment) return sum;
@@ -576,41 +604,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     
     // 2. Date Filter
     if (!tx.timestamp) return false;
-    try {
-      // Robust date parsing matching the backend logic
-      let txDateStr = '';
-      if (typeof tx.timestamp === 'string') {
-        if (tx.timestamp.includes('T')) {
-          txDateStr = tx.timestamp.substring(0, 10); // YYYY-MM-DD
-        } else {
-          // Try parsing non-ISO string
-          const d = new Date(tx.timestamp);
-          if (!isNaN(d.getTime())) {
-            txDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          } else if (tx.timestamp.includes('/')) {
-            // Manual parse for DD/MM/YYYY
-            const p = tx.timestamp.split(' ')[0].split('/');
-            if (p.length === 3) {
-              if (p[2].length === 4) txDateStr = `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
-              else if (p[0].length === 4) txDateStr = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
-            }
-          } else if (tx.timestamp.includes('-')) {
-            const p = tx.timestamp.split(' ')[0].split('-');
-            if (p.length === 3) {
-              if (p[2].length === 4) txDateStr = `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
-              else if (p[0].length === 4) txDateStr = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
-            }
-          }
-        }
-      } else if (tx.timestamp instanceof Date) {
-        const d = tx.timestamp;
-        txDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      }
-      
-      return txDateStr === currentDateStr;
-    } catch {
-      return false;
-    }
+    return checkTxDateMatch(tx.timestamp, currentDateStr);
   });
 
   const queueCount = currentBranchFilter === 'Semua'
@@ -784,7 +778,13 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       `Terima kasih!`;
   };
 
-  if (loadingMetrics && !adminMetrics) {
+  // Define whether we should show the full-screen spinner
+  // For cashier, show it when loadingMetrics is true but only if we don't have local data yet (first load)
+  // The user requested: "Di admin biarkan tanpa loading spinner itu, tapi di kasir tambahkan loading spinner saat pertama kali login itu"
+  const isFirstCashierLoad = activeBranch !== 'ADMIN' && allTransactions.length === 0;
+  const shouldShowSpinner = loadingMetrics && isFirstCashierLoad;
+
+  if (shouldShowSpinner) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 animate-in fade-in duration-500">
         <div className="relative">
@@ -805,7 +805,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
   return (
     <div 
-      className="space-y-6 animate-fade-in pb-24 relative"
+      className={`space-y-6 animate-fade-in pb-24 relative ${loadingMetrics ? 'opacity-70 pointer-events-none transition-opacity duration-300' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -1101,7 +1101,12 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               recentTxList.slice(0, 3).map((tx) => (
                 <div 
                   key={tx.id}
-                  className="flex items-center justify-between p-3 rounded-xl border border-zinc-100 transition group hover:bg-zinc-50"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (onSelectTransaction) onSelectTransaction(tx);
+                  }}
+                  className="flex items-center justify-between p-3 rounded-xl border border-zinc-100 transition group hover:bg-zinc-50 cursor-pointer active:scale-95 touch-manipulation"
                 >
                   <div className="flex items-center gap-3 truncate">
                     {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
