@@ -50,6 +50,29 @@
   }
 }
 
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #thermal-section, #thermal-section * {
+    visibility: visible;
+  }
+  #thermal-section {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

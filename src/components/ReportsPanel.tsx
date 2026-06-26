@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { CustomSelect } from './CustomSelect';
+import { ImageWithFallback } from './ImageWithFallback';
 import { 
   BarChart, 
   PieChart, 
@@ -355,7 +356,12 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       
       const debit = Number(t.DEBIT || t.Masuk || t[4] || 0);
       const kredit = Number(t.KREDIT || t.Keluar || t[5] || 0);
-      const foto = t.FOTO || t.foto || t.bukti || t.BUKTI || '';
+      const rawFoto = t.BUKTI_NOTA || t.bukti_nota || t.LINK_DRIVE || t.link_drive || t.FOTO || t.foto || t.bukti || t.BUKTI || '';
+      const foto = (typeof rawFoto === 'string' && (rawFoto.startsWith('http://') || rawFoto.startsWith('https://') || rawFoto.startsWith('data:image/'))) ? rawFoto.trim() : '';
+
+      const cash = Number(t.CASH || t.cash || t.total_cash || t.TOTAL_CASH || t.Total_Cash || (Array.isArray(t) ? t[6] : 0) || 0);
+      const transfer = Number(t.TRANSFER || t.transfer || t.total_transfer || t.TOTAL_TRANSFER || t.Total_Transfer || (Array.isArray(t) ? t[7] : 0) || 0);
+      const compliment = Number(t.COMPLIMENT || t.compliment || t.total_compliment || t.TOTAL_COMPLIMENT || t.Total_Compliment || (Array.isArray(t) ? t[8] : 0) || 0);
 
       return {
         original: t,
@@ -366,7 +372,10 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
         debit,
         kredit,
         tglStr,
-        foto
+        foto,
+        cash,
+        transfer,
+        compliment
       };
     });
   }, [rawTransactions]);
@@ -666,64 +675,63 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
           </div>
         </div>
  
-        {/* Summary & Cash/Transfer Bento Grid Container */}
-        <div className="space-y-3 relative z-10 pt-2">
-          {/* Summary Grid */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="bg-emerald-50 border border-emerald-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-              <div className="flex items-center gap-1.5 mb-1.5 text-emerald-600">
-                 <TrendingUp className="h-4 w-4" />
-                 <p className="text-[9px] font-black tracking-widest uppercase">Total Omset</p>
-              </div>
-              <h4 className="text-sm sm:text-base font-black text-emerald-700">
-                {loadingBukuKas ? (
-                  <span className="text-zinc-400 animate-pulse">Loading...</span>
-                ) : (
-                  `Rp${totalOmset.toLocaleString('id-ID')}`
-                )}
-              </h4>
-              {/* No nested cash/transfer breakdown here */}
+      {/* Summary & Cash/Transfer Bento Grid Container */}
+      <div className="space-y-3 relative z-10 pt-2">
+        {/* Summary Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-amber-50 border border-amber-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+            <div className="flex items-center gap-1.5 mb-1.5 text-amber-600">
+               <Layers className="h-4 w-4" />
+               <p className="text-[9px] font-black tracking-widest uppercase">Saldo Awal</p>
             </div>
-            <div className="bg-red-50 border border-red-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-              <div className="flex items-center gap-1.5 mb-1.5 text-red-600">
-                 <TrendingDown className="h-4 w-4" />
-                 <p className="text-[9px] font-black tracking-widest uppercase">Pengeluaran</p>
-              </div>
-              <h4 className="text-sm sm:text-base font-black text-red-700">
-                {loadingBukuKas ? (
-                  <span className="text-zinc-400 animate-pulse">Loading...</span>
-                ) : (
-                  `Rp${totalPengeluaran.toLocaleString('id-ID')}`
-                )}
-              </h4>
-            </div>
-            <div className="bg-amber-50 border border-amber-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
-              <div className="flex items-center gap-1.5 mb-1.5 text-amber-600">
-                 <Layers className="h-4 w-4" />
-                 <p className="text-[9px] font-black tracking-widest uppercase">Saldo Awal</p>
-              </div>
-              <h4 className="text-sm sm:text-base font-black text-amber-700">
-                {loadingBukuKas ? (
-                  <span className="text-zinc-400 animate-pulse">Loading...</span>
-                ) : (
-                  `Rp${calculatedSaldoAwal.toLocaleString('id-ID')}`
-                )}
-              </h4>
-            </div>
-            <div className={`border p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center ${saldoBersih >= 0 ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                 <Wallet className="h-4 w-4" />
-                 <p className="text-[9px] font-black tracking-widest uppercase">Saldo Bersih</p>
-              </div>
-              <h4 className={`text-sm sm:text-base font-black ${saldoBersih >= 0 ? 'text-sky-700' : 'text-orange-700'}`}>
-                {loadingBukuKas ? (
-                  <span className="text-zinc-400 animate-pulse">Loading...</span>
-                ) : (
-                  `Rp${saldoBersih.toLocaleString('id-ID')}`
-                )}
-              </h4>
-            </div>
+            <h4 className="text-sm sm:text-base font-black text-amber-700">
+              {loadingBukuKas ? (
+                <span className="text-zinc-400 animate-pulse">Loading...</span>
+              ) : (
+                `Rp${calculatedSaldoAwal.toLocaleString('id-ID')}`
+              )}
+            </h4>
           </div>
+          <div className={`border p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center ${saldoBersih >= 0 ? 'bg-sky-50 border-sky-100 text-sky-600' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
+            <div className="flex items-center gap-1.5 mb-1.5">
+               <Wallet className="h-4 w-4" />
+               <p className="text-[9px] font-black tracking-widest uppercase">Saldo Bersih</p>
+            </div>
+            <h4 className={`text-sm sm:text-base font-black ${saldoBersih >= 0 ? 'text-sky-700' : 'text-orange-700'}`}>
+              {loadingBukuKas ? (
+                <span className="text-zinc-400 animate-pulse">Loading...</span>
+              ) : (
+                `Rp${saldoBersih.toLocaleString('id-ID')}`
+              )}
+            </h4>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+            <div className="flex items-center gap-1.5 mb-1.5 text-emerald-600">
+               <TrendingUp className="h-4 w-4" />
+               <p className="text-[9px] font-black tracking-widest uppercase">Total Omset</p>
+            </div>
+            <h4 className="text-sm sm:text-base font-black text-emerald-700">
+              {loadingBukuKas ? (
+                <span className="text-zinc-400 animate-pulse">Loading...</span>
+              ) : (
+                `Rp${totalOmset.toLocaleString('id-ID')}`
+              )}
+            </h4>
+          </div>
+          <div className="bg-red-50 border border-red-100 p-3.5 sm:p-4 rounded-2xl flex flex-col justify-center">
+            <div className="flex items-center gap-1.5 mb-1.5 text-red-600">
+               <TrendingDown className="h-4 w-4" />
+               <p className="text-[9px] font-black tracking-widest uppercase">Pengeluaran</p>
+            </div>
+            <h4 className="text-sm sm:text-base font-black text-red-700">
+              {loadingBukuKas ? (
+                <span className="text-zinc-400 animate-pulse">Loading...</span>
+              ) : (
+                `Rp${totalPengeluaran.toLocaleString('id-ID')}`
+              )}
+            </h4>
+          </div>
+        </div>
 
           {/* Cash & Transfer Split Row */}
           <div className="grid grid-cols-2 gap-3">
@@ -1004,7 +1012,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
       {/* TRANSACTION DETAILS MODAL */}
       {selectedTx && createPortal(
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-fade-in animate-duration-200">
-          <div className="bg-white rounded-[24px] w-full max-w-sm p-6 shadow-xl flex flex-col gap-4 text-left transform scale-100 transition-all select-none border-0">
+          <div className="bg-white rounded-[24px] w-full max-w-sm p-6 shadow-xl flex flex-col gap-4 text-left transform scale-100 transition-all select-none border-0 max-h-[85vh] overflow-y-auto custom-scrollbar">
             
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-1 border-b border-zinc-100">
@@ -1066,25 +1074,51 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                 </div>
               </div>
 
-              {selectedTx.foto && (
-                <div className="flex flex-col gap-2 pt-3 border-t border-zinc-100">
-                  <span className="block text-[9px] font-black text-zinc-400 uppercase tracking-wider">Bukti Nota / Foto</span>
-                  <div className="relative rounded-xl overflow-hidden border border-zinc-200 bg-zinc-50 max-h-40 flex items-center justify-center">
-                    <img 
-                      src={selectedTx.foto} 
-                      alt="Bukti Nota" 
-                      className="max-h-40 object-contain"
-                      referrerPolicy="no-referrer"
-                    />
+              {/* Payment Breakdown Section */}
+              <div className="pt-3 border-t border-zinc-100 grid grid-cols-3 gap-2">
+                <div className="bg-zinc-50 p-2 rounded-xl text-center border border-zinc-100">
+                  <span className="block text-[8px] font-black text-zinc-400 uppercase tracking-wider">Total Cash</span>
+                  <span className="text-xs font-black text-zinc-800 mt-0.5 block">
+                    Rp{(selectedTx.cash || 0).toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <div className="bg-zinc-50 p-2 rounded-xl text-center border border-zinc-100">
+                  <span className="block text-[8px] font-black text-zinc-400 uppercase tracking-wider">Total Transfer</span>
+                  <span className="text-xs font-black text-zinc-800 mt-0.5 block">
+                    Rp{(selectedTx.transfer || 0).toLocaleString('id-ID')}
+                  </span>
+                </div>
+                <div className="bg-zinc-50 p-2 rounded-xl text-center border border-zinc-100">
+                  <span className="block text-[8px] font-black text-zinc-400 uppercase tracking-wider">Compliment</span>
+                  <span className="text-xs font-black text-zinc-800 mt-0.5 block">
+                    Rp{(selectedTx.compliment || 0).toLocaleString('id-ID')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Bukti Nota / Foto Section (Always Shown) */}
+              <div className="flex flex-col gap-2 pt-3 border-t border-zinc-100">
+                <span className="block text-[9px] font-black text-zinc-400 uppercase tracking-wider">Bukti Nota / Foto</span>
+                <div className="relative rounded-xl overflow-hidden border border-zinc-200 bg-zinc-50 max-h-40 flex items-center justify-center min-h-[80px]">
+                  <ImageWithFallback 
+                    src={selectedTx.foto} 
+                    alt="Bukti Nota" 
+                    className="max-h-40 object-contain w-full"
+                    fallbackClassName="h-24 w-full rounded-xl border border-zinc-200 bg-zinc-50 flex flex-col items-center justify-center text-zinc-400 p-4"
+                  />
+                  {selectedTx.foto && (selectedTx.foto.startsWith('http://') || selectedTx.foto.startsWith('https://') || selectedTx.foto.startsWith('data:image/')) && (
                     <a 
                       href={selectedTx.foto} 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="absolute bottom-2 right-2 bg-zinc-900/80 hover:bg-zinc-900 text-white text-[9px] font-extrabold px-2 py-1 rounded-md uppercase tracking-wider flex items-center gap-1 backdrop-blur-xs transition"
                     >
-                      Buka Penuh
+                      Buka Penuh ↗
                     </a>
-                  </div>
+                  )}
+                </div>
+                
+                {selectedTx.foto && (selectedTx.foto.startsWith('http://') || selectedTx.foto.startsWith('https://') || selectedTx.foto.startsWith('data:image/')) && (
                   <button
                     onClick={() => {
                       const text = `*BUKTI TRANSAKSI KAS*\n\n` +
@@ -1092,7 +1126,10 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                         `• Kategori: ${selectedTx.kat || selectedTx.kategori}\n` +
                         `• Jumlah: ${selectedTx.isDebit ? '+' : '-'}Rp${selectedTx.nominal.toLocaleString('id-ID')}\n` +
                         `• Tanggal: ${selectedTx.tgl}\n` +
-                        `• Cabang: ${selectedTx.cabName || 'Semua'}\n\n` +
+                        `• Cabang: ${selectedTx.cabName || 'Semua'}\n` +
+                        `• Cash: Rp${(selectedTx.cash || 0).toLocaleString('id-ID')}\n` +
+                        `• Transfer: Rp${(selectedTx.transfer || 0).toLocaleString('id-ID')}\n` +
+                        `• Compliment: Rp${(selectedTx.compliment || 0).toLocaleString('id-ID')}\n\n` +
                         `*Link Bukti Nota:* ${selectedTx.foto}`;
                       window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
                     }}
@@ -1100,8 +1137,8 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
                   >
                     Bagikan Ke WA
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Footer Action */}

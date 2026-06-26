@@ -68,6 +68,11 @@ import './index.css';
 
   // Prevent uncaught errors or unhandled rejections containing Event or Window objects from propagation
   window.addEventListener('error', (event) => {
+    // If it's a resource load failure (e.g. <img> or <link> failed to load)
+    if (event.target && event.target !== window) {
+      originalWarn.call(console, 'Resource load failure:', (event.target as any).src || (event.target as any).href || event.target);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     originalError.call(console, 'Uncaught error intercepted:', sanitize(event.error || event.message || event));

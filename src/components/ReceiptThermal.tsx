@@ -141,6 +141,13 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
         <span className="font-black text-sm text-black">Rp{total.toLocaleString('id-ID')}</span>
       </div>
 
+      {transaction.pesanan?.CATATAN && (
+        <div className="mt-2 pt-2 border-t border-dotted border-black/30">
+          <p className="text-[8px] font-black uppercase text-black mb-0.5">Catatan:</p>
+          <p className="text-[10px] leading-tight text-zinc-900 italic">"{transaction.pesanan.CATATAN}"</p>
+        </div>
+      )}
+
       <p className="my-3 border-t border-dashed border-black"></p>
 
       <div className="text-center space-y-1 mb-2">
@@ -160,8 +167,8 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
 
   return (
     <div className="flex flex-col items-center justify-center py-2 grayscale" id="thermal-section">
-      <div className="w-full max-w-[340px] bg-white border border-[#d4d4d8] shadow-xl rounded-2xl overflow-hidden relative">
-        <div className="bg-[#f4f4f5] px-4 py-2 flex justify-between items-center border-b border-[#e4e4e7]">
+      <div className="w-full max-w-[340px] bg-white border border-[#d4d4d8] shadow-xl rounded-2xl overflow-hidden relative print:border-none print:shadow-none print:max-w-none">
+        <div className="bg-[#f4f4f5] px-4 py-2 flex justify-between items-center border-b border-[#e4e4e7] print:hidden">
           <span className="text-[10px] font-mono font-bold text-[#52525b] uppercase tracking-widest flex items-center gap-1.5">
             <PrinterIcon className="h-3 w-3" />
             Thermal 80mm

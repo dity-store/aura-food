@@ -284,7 +284,13 @@ export default function POSSimulator({
     setStartY(null);
   };
 
-  const [isInitialLoading, setIsInitialLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  useEffect(() => {
+    if (selectedTransaction) {
+      setSelectedTransactionForKasir(selectedTransaction);
+    }
+  }, [selectedTransaction]);
 
   useEffect(() => {
     if (onCreatingStatusChange) {
@@ -297,8 +303,8 @@ export default function POSSimulator({
   }, [isCreatingTx, onCreatingStatusChange, onSelectTransaction]);
 
   const loadDataFromDB = async (forceRemote: boolean = false) => {
+    setIsInitialLoading(true);
     try {
-      if (forceRemote) setIsInitialLoading(true);
       const dbMaster = await seedMasterDataIfEmpty();
       setMasterData(dbMaster);
 
@@ -1574,12 +1580,6 @@ export default function POSSimulator({
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {isInitialLoading && (
-            <div className="py-20 text-center text-zinc-500 bg-white rounded-[32px] border border-zinc-200 shadow-sm flex flex-col items-center justify-center gap-3 animate-pulse">
-              <RefreshCw className="h-6 w-6 text-red-650 animate-spin" />
-              <p className="text-sm font-medium text-zinc-600">Memuat data dari sistem pusat...</p>
-            </div>
-          )}
           {pullDistance > 0 && (
             <div className="fixed top-20 left-0 right-0 flex justify-center items-center h-12">
               <RefreshCw className={`h-6 w-6 text-red-700 animate-spin`} style={{ opacity: pullDistance / 100 }} />
@@ -1622,55 +1622,55 @@ export default function POSSimulator({
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
-                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-emerald-50"><Banknote className="h-16 w-16" /></div>
-                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-0.5">Total Omset</span>
-                       {isMetricsLoading ? (
-                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
-                       ) : (
-                         <p className="text-sm font-black text-emerald-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalRevenue.toLocaleString('id-ID')}</p>
-                       )}
-                    </div>
-                  </div>
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
-                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-amber-50"><ShoppingBag className="h-16 w-16" /></div>
-                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block mb-0.5">Total Pesanan</span>
-                       <div className="flex flex-col gap-0.5 mt-0.5">
-                         {isMetricsLoading ? (
-                           <p className="text-xs font-bold text-zinc-400 animate-pulse">Loading...</p>
-                         ) : (
-                           <>
-                             <p className="text-lg font-black text-amber-950 tracking-tight leading-none">{todayTxs.length}</p>
-                             <span className="text-[9px] font-bold text-amber-500 uppercase tracking-widest leading-none">Selesai</span>
-                           </>
-                         )}
-                       </div>
-                    </div>
-                  </div>
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
-                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-blue-50"><Coins className="h-16 w-16" /></div>
-                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-0.5">Total Cash</span>
-                       {isMetricsLoading ? (
-                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
-                       ) : (
-                         <p className="text-sm font-black text-blue-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalCash.toLocaleString('id-ID')}</p>
-                       )}
-                    </div>
-                  </div>
-                  <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
-                    <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-fuchsia-50"><CreditCard className="h-16 w-16" /></div>
-                    <div className="relative z-10 flex flex-col justify-center h-full pt-1">
-                       <span className="text-[10px] font-black text-fuchsia-800 uppercase tracking-widest block mb-0.5">Total Transfer</span>
-                       {isMetricsLoading ? (
-                         <p className="text-xs font-bold text-zinc-400 animate-pulse pt-1">Loading...</p>
-                       ) : (
-                         <p className="text-sm font-black text-fuchsia-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalTransfer.toLocaleString('id-ID')}</p>
-                       )}
-                    </div>
-                  </div>
+              <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-emerald-50"><Banknote className="h-16 w-16" /></div>
+                <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-0.5">Total Omset</span>
+                   {isMetricsLoading || isInitialLoading ? (
+                     <p className="text-xs font-black text-zinc-400 animate-pulse pt-1 uppercase tracking-widest">Loading...</p>
+                   ) : (
+                     <p className="text-sm font-black text-emerald-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalRevenue.toLocaleString('id-ID')}</p>
+                   )}
+                </div>
+              </div>
+              <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-amber-50"><ShoppingBag className="h-16 w-16" /></div>
+                <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                   <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block mb-0.5">Total Pesanan</span>
+                   <div className="flex flex-col gap-0.5 mt-0.5">
+                     {isMetricsLoading || isInitialLoading ? (
+                       <p className="text-xs font-black text-zinc-400 animate-pulse uppercase tracking-widest">Loading...</p>
+                     ) : (
+                       <>
+                         <p className="text-lg font-black text-amber-950 tracking-tight leading-none">{todayTxs.length}</p>
+                         <span className="text-[9px] font-bold text-amber-500 uppercase tracking-widest leading-none">Selesai</span>
+                       </>
+                     )}
+                   </div>
+                </div>
+              </div>
+              <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-blue-50"><Coins className="h-16 w-16" /></div>
+                <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                   <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-0.5">Total Cash</span>
+                   {isMetricsLoading || isInitialLoading ? (
+                     <p className="text-xs font-black text-zinc-400 animate-pulse pt-1 uppercase tracking-widest">Loading...</p>
+                   ) : (
+                     <p className="text-sm font-black text-blue-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalCash.toLocaleString('id-ID')}</p>
+                   )}
+                </div>
+              </div>
+              <div className="bg-white border border-zinc-200/85 p-4 rounded-[24px] shadow-sm flex flex-col justify-center relative overflow-hidden min-h-[90px]">
+                <div className="absolute right-0 top-0 translate-x-3 -translate-y-3 text-fuchsia-50"><CreditCard className="h-16 w-16" /></div>
+                <div className="relative z-10 flex flex-col justify-center h-full pt-1">
+                   <span className="text-[10px] font-black text-fuchsia-800 uppercase tracking-widest block mb-0.5">Total Transfer</span>
+                   {isMetricsLoading || isInitialLoading ? (
+                     <p className="text-xs font-black text-zinc-400 animate-pulse pt-1 uppercase tracking-widest">Loading...</p>
+                   ) : (
+                     <p className="text-sm font-black text-fuchsia-950 tracking-tight leading-none pt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Rp{totalTransfer.toLocaleString('id-ID')}</p>
+                   )}
+                </div>
+              </div>
                 </div>
                 <button
                   onClick={handleOpenReport}
@@ -1701,15 +1701,35 @@ export default function POSSimulator({
             </div>
 
             <div className="flex-1 space-y-2.5 pr-1">
-              {history.length === 0 ? (
+              {isInitialLoading ? (
+                <div className="flex flex-col gap-2.5">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="p-4 border border-zinc-100 rounded-2xl bg-zinc-50/50 animate-pulse flex flex-col gap-3">
+                      <div className="flex justify-between">
+                        <div className="h-3 w-24 bg-zinc-200 rounded"></div>
+                        <div className="h-3 w-12 bg-zinc-200 rounded"></div>
+                      </div>
+                      <div className="flex justify-between items-end">
+                        <div className="space-y-2">
+                          <div className="h-2 w-32 bg-zinc-200 rounded"></div>
+                          <div className="h-2 w-16 bg-zinc-200 rounded"></div>
+                        </div>
+                        <div className="h-4 w-20 bg-zinc-200 rounded"></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : history.length === 0 ? (
                 <div className="py-10 flex flex-col items-center justify-center text-center bg-zinc-50 border border-zinc-200/50 rounded-2xl">
                   <ReceiptText className="h-8 w-8 text-zinc-300 mb-3" />
                   <p className="text-zinc-500 font-medium text-xs mb-3">Belum ada transaksi dibuat.</p>
                   <button 
                     onClick={() => setIsCreatingTx(true)}
-                    className="bg-red-50 text-red-700 hover:bg-red-100 font-bold text-[10px] px-4 py-2 rounded-xl transition flex items-center gap-2 active:scale-95 uppercase tracking-wider"
+                    disabled={isInitialLoading}
+                    className={`bg-red-700 text-white hover:bg-red-800 font-black text-xs px-6 py-4 rounded-2xl transition flex items-center justify-center gap-2 shadow-lg active:scale-95 uppercase tracking-widest w-full sm:w-auto ${isInitialLoading ? 'opacity-50 grayscale cursor-not-allowed' : 'cursor-pointer'}`}
                   >
-                    <Plus className="h-3 w-3" /> Buat Transaksi
+                    <Plus className="h-4 w-4" /> 
+                    {isInitialLoading ? 'Memuat Data...' : 'Tambah Pesanan Baru'}
                   </button>
                 </div>
               ) : (
@@ -1717,8 +1737,7 @@ export default function POSSimulator({
                   {history.slice(0, 3).map((tx) => (
                     <div
                       key={tx.id}
-                      onClick={(e) => { e.stopPropagation(); onSelectTransaction(tx); setTimeout(() => document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' }), 100); }}
-                      className={`p-4 border rounded-2xl cursor-pointer transition flex flex-col justify-between text-left group ${
+                      className={`p-4 border rounded-2xl transition flex flex-col justify-between text-left group ${
                         selectedTransaction?.id === tx.id 
                           ? 'bg-red-50 border-red-700 ring-1 ring-red-700/10' 
                           : 'border-zinc-200/80 hover:border-zinc-400 bg-white hover:bg-zinc-50/20'
@@ -1747,15 +1766,6 @@ export default function POSSimulator({
                           <p className="text-[10px] text-zinc-500 font-medium">
                             {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
                           </p>
-                          <span 
-                            className="text-[10px] text-red-750 font-bold hover:underline inline-flex items-center gap-0.5 mt-1 transition"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTransactionForKasir(tx);
-                            }}
-                          >
-                            Lihat Struk
-                          </span>
                         </div>
                         <p className="text-sm font-black text-zinc-950">
                           Rp{tx.totalAmount.toLocaleString('id-ID')}
@@ -1771,14 +1781,14 @@ export default function POSSimulator({
 
         {/* Modal Pratinjau Struk untuk Kasir */}
         {selectedTransactionForKasir && (
-          <div className="fixed inset-0 z-[1000] bg-zinc-950/60 backdrop-blur-sm flex justify-center items-end p-4 animate-in fade-in duration-200" onClick={() => setSelectedTransactionForKasir(null)}>
+          <div className="fixed inset-0 z-[1000] bg-zinc-950/60 backdrop-blur-sm flex justify-center items-end p-4 animate-in fade-in duration-200" onClick={() => { setSelectedTransactionForKasir(null); onSelectTransaction(null); }}>
             <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 font-sans">
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
                   Pratinjau Struk
                 </h3>
                 <button 
-                  onClick={() => setSelectedTransactionForKasir(null)}
+                  onClick={() => { setSelectedTransactionForKasir(null); onSelectTransaction(null); }}
                   className="p-1.5 bg-white hover:bg-zinc-100 rounded-lg text-zinc-700 transition shadow-sm border border-zinc-200 cursor-pointer active:scale-95"
                 >
                   <X className="h-4 w-4" />
@@ -1914,17 +1924,25 @@ export default function POSSimulator({
         {activeBranch !== 'ADMIN' && createPortal(
           <button
             onClick={() => {
+              if (isInitialLoading) return;
               setCart([]);
               setIsCreatingTx(true);
               onSelectTransaction(null);
             }}
-            className="fixed bottom-6 right-4 md:bottom-8 md:right-8 h-14 w-14 md:h-16 md:w-16 bg-red-700 text-white rounded-full shadow-2xl flex items-center justify-center hover:bg-red-800 transition active:scale-95 z-40 cursor-pointer"
+            disabled={isInitialLoading}
+            className={`fixed bottom-6 right-4 md:bottom-8 md:right-8 h-14 w-14 md:h-16 md:w-16 bg-red-700 text-white rounded-full shadow-2xl flex items-center justify-center transition active:scale-95 z-40 cursor-pointer ${isInitialLoading ? 'opacity-50 cursor-not-allowed grayscale' : 'hover:bg-red-800'}`}
           >
             <div className="relative">
-              <ShoppingCart className="h-6 w-6 md:h-7 md:w-7 text-white" />
-              <div className="absolute -top-1 -right-2 md:-top-1.5 md:-right-2.5 h-4 w-4 md:h-5 md:w-5 bg-white text-red-700 rounded-full flex items-center justify-center border-2 border-red-700 shadow-sm">
-                 <Plus className="h-2.5 w-2.5 md:h-3 md:w-3 font-bold stroke-[3]" />
-              </div>
+              {isInitialLoading ? (
+                <RefreshCw className="h-6 w-6 md:h-7 md:w-7 text-white animate-spin" />
+              ) : (
+                <>
+                  <ShoppingCart className="h-6 w-6 md:h-7 md:w-7 text-white" />
+                  <div className="absolute -top-1 -right-2 md:-top-1.5 md:-right-2.5 h-4 w-4 md:h-5 md:w-5 bg-white text-red-700 rounded-full flex items-center justify-center border-2 border-red-700 shadow-sm">
+                     <Plus className="h-2.5 w-2.5 md:h-3 md:w-3 font-bold stroke-[3]" />
+                  </div>
+                </>
+              )}
             </div>
           </button>,
           document.body

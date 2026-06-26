@@ -182,7 +182,7 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
       }).catch(err => console.warn('Upload error:', err));
     }
   } catch (err) {
-    console.error("Error generating text-based PDF:", err);
+    console.warn("Error generating text-based PDF:", err);
   }
 };
 

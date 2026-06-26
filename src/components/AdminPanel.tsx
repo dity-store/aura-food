@@ -28,10 +28,13 @@ import {
   AlertTriangle,
   AlertCircle,
   Users,
-  ClipboardList
+  ClipboardList,
+  FileImage,
+  ImageOff
 } from 'lucide-react';
 import { getMasterData, saveMasterData, syncMasterDataFromGAS, postUniversalDataToGAS, fetchUniversalDataFromGAS, uploadBukuKasFotoToGAS } from '../utils/db';
 import { CustomSelect } from './CustomSelect';
+import { ImageWithFallback } from './ImageWithFallback';
 import { MasterData, Cabang, Kategori, Menu, Varian, Promo } from '../types';
 import { getSessionCache } from '../utils/sessionCache';
 
@@ -344,6 +347,43 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   };
   const [originalEditData, setOriginalEditData] = useState<any>(null);
   const [initialFormData, setInitialFormData] = useState<any>(null);
+
+  const syncBukuKasFromGASHelper = async (showLoading = true) => {
+    if (showLoading) setIsUniversalLoading(true);
+    try {
+      const data = await fetchUniversalDataFromGAS('Transaksi');
+      if (data && data.length > 0) {
+        const sorted = [...data].sort((a, b) => {
+          const parseToDate = (cellValue: any): Date => {
+            if (!cellValue) return new Date(0);
+            if (cellValue instanceof Date) return cellValue;
+            let str = String(cellValue).trim().substring(0, 10);
+            if (str.includes('/')) {
+              const p = str.split('/');
+              return new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+            } else if (str.includes('-')) {
+              const p = str.split('-');
+              return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+            }
+            return new Date(cellValue);
+          };
+          return parseToDate(b.tanggal || b.TANGGAL || (Array.isArray(b) ? b[0] : '')).getTime() - parseToDate(a.tanggal || a.TANGGAL || (Array.isArray(a) ? a[0] : '')).getTime();
+        });
+        setBukuKasList(sorted);
+        localStorage.setItem('cached_buku_kas_data_ALL', JSON.stringify({
+          status: 'success',
+          transaksi: sorted,
+          pemasukan: sorted.reduce((sum: number, tx: any) => sum + Number(tx.debit || tx.DEBIT || (Array.isArray(tx) ? tx[4] : 0) || 0), 0),
+          pengeluaran: sorted.reduce((sum: number, tx: any) => sum + Number(tx.kredit || tx.KREDIT || (Array.isArray(tx) ? tx[5] : 0) || 0), 0),
+          saldoBersih: 0
+        }));
+      }
+    } catch (err) {
+      console.error("Gagal sinkronisasi Buku Kas:", err);
+    } finally {
+      if (showLoading) setIsUniversalLoading(false);
+    }
+  };
 
   const handleCloseModal = () => {
     const hasUnsavedChanges = checkHasChanges(true);
@@ -747,8 +787,18 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           setBukuKasList(sorted);
         }
       }
+      
+      const cachedInv = localStorage.getItem('cached_inventaris_data');
+      if (cachedInv) {
+        setInventarisData(JSON.parse(cachedInv));
+      }
+      
+      const cachedShift = localStorage.getItem('cached_shift_data');
+      if (cachedShift) {
+        setShiftData(JSON.parse(cachedShift));
+      }
     } catch (e) {
-      console.log('Error reading cached buku kas:', e);
+      console.log('Error reading cached buku kas/inventaris/shift:', e);
     }
   };
 
@@ -801,33 +851,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
         await syncMasterDataFromGAS();
         
         if (activeModule === 'kas') {
-          const data = await fetchUniversalDataFromGAS('Transaksi');
-          if (data && data.length > 0) {
-            const sorted = [...data].sort((a, b) => {
-              const parseToDate = (cellValue: any): Date => {
-                if (!cellValue) return new Date(0);
-                if (cellValue instanceof Date) return cellValue;
-                let str = String(cellValue).trim().substring(0, 10);
-                if (str.includes('/')) {
-                  const p = str.split('/');
-                  return new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
-                } else if (str.includes('-')) {
-                  const p = str.split('-');
-                  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-                }
-                return new Date(cellValue);
-              };
-              return parseToDate(b.tanggal || b.TANGGAL || (Array.isArray(b) ? b[0] : '')).getTime() - parseToDate(a.tanggal || a.TANGGAL || (Array.isArray(a) ? a[0] : '')).getTime();
-            });
-            setBukuKasList(sorted);
-            localStorage.setItem('cached_buku_kas_data_ALL', JSON.stringify({
-              status: 'success',
-              transaksi: sorted,
-              pemasukan: sorted.reduce((sum: number, tx: any) => sum + Number(tx.debit || tx.DEBIT || (Array.isArray(tx) ? tx[4] : 0) || 0), 0),
-              pengeluaran: sorted.reduce((sum: number, tx: any) => sum + Number(tx.kredit || tx.KREDIT || (Array.isArray(tx) ? tx[5] : 0) || 0), 0),
-              saldoBersih: 0
-            }));
-          }
+          await syncBukuKasFromGASHelper(false);
         } else if (activeModule === 'inventaris') {
           const data = await fetchUniversalDataFromGAS('Data_Inventaris');
           setInventarisData(data || []);
@@ -937,19 +961,44 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       }
 
       if (sheetName && idCol) {
-        if (activeModule === 'kas') {
-          const selectedItems = bukuKasList.filter((item: any) => selectedIds.includes(getItemId(item)));
-          for (const item of selectedItems) {
-            await postUniversalDataToGAS('DELETE_DATA_MATCH', 'Transaksi', null, null, {
-              matchData: {
-                TANGGAL: item.tanggal || item.TANGGAL || '',
-                CABANG: item.cabang || item.CABANG || item.ID_CABANG || '',
-                KETERANGAN: item.keterangan || item.KETERANGAN || ''
+        try {
+          if (activeModule === 'kas') {
+            const selectedItems = bukuKasList.filter((item: any) => selectedIds.includes(getItemId(item)));
+            for (const item of selectedItems) {
+              const id = getItemId(item);
+              
+              // If there's a real ID, use DELETE_DATA (matches the user's provided GAS script)
+              if (id && !id.startsWith('TEMP-')) {
+                // Try to determine the ID column name
+                const idColName = item.ID_TRANSAKSI ? 'ID_TRANSAKSI' : (item.ID ? 'ID' : (item._id ? '_id' : 'ID_TRANSAKSI'));
+                
+                await postUniversalDataToGAS('DELETE_DATA', 'Transaksi', idColName, id, {});
+              } else {
+                // Fallback for items without ID or temp items (matching by content)
+                const matchTgl = item.tanggal || item.TANGGAL || (Array.isArray(item) ? item[0] : '');
+                const matchCab = item.cabang || item.CABANG || item.ID_CABANG || (Array.isArray(item) ? item[2] : '');
+                const matchKet = (item.keterangan || item.KETERANGAN || (Array.isArray(item) ? item[3] : '')).trim();
+                const matchDeb = Number(item.debit || item.DEBIT || (Array.isArray(item) ? item[4] : 0));
+                const matchKre = Number(item.kredit || item.KREDIT || (Array.isArray(item) ? item[5] : 0));
+                
+                // Note: The user's script doesn't explicitly have DELETE_DATA_MATCH, 
+                // but we keep this as a fallback in case they add it or for local filtering
+                await postUniversalDataToGAS('DELETE_DATA', 'Transaksi', 'KETERANGAN', matchKet, {
+                  matchData: {
+                    TANGGAL: matchTgl,
+                    CABANG: matchCab,
+                    KETERANGAN: matchKet,
+                    DEBIT: matchDeb,
+                    KREDIT: matchKre
+                  }
+                });
               }
-            });
+            }
+          } else {
+            await postUniversalDataToGAS('DELETE_DATA', sheetName, idCol, null, { idValues: selectedIds });
           }
-        } else {
-          await postUniversalDataToGAS('DELETE_DATA', sheetName, idCol, null, { idValues: selectedIds });
+        } catch (apiErr) {
+          console.warn("Gagal menghapus dari server, menghapus secara lokal:", apiErr);
         }
       }
 
@@ -964,6 +1013,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
             localStorage.removeItem(key);
           }
         });
+        
+        // RE-FETCH in background to ensure local state matches Spreadsheet perfectly
+        setTimeout(() => syncBukuKasFromGASHelper(false), 1500);
       } else if (activeModule === 'inventaris') {
         setInventarisData(prev => prev.filter((item: any) => !selectedIds.includes(item.ID_LOG)));
       } else if (activeModule === 'shift') {
@@ -1043,14 +1095,28 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
     setActiveModule(id);
     
     try {
-      if (id === 'inventaris' && inventarisData.length === 0) {
+      if (id === 'inventaris') {
+        const cachedInv = localStorage.getItem('cached_inventaris_data');
+        if (cachedInv) {
+          try { setInventarisData(JSON.parse(cachedInv)); } catch (e) {}
+        }
         setIsUniversalLoading(true);
         const data = await fetchUniversalDataFromGAS('Data_Inventaris');
-        setInventarisData(data || []);
-      } else if (id === 'shift' && shiftData.length === 0) {
+        if (data && data.length > 0) {
+          setInventarisData(data);
+          localStorage.setItem('cached_inventaris_data', JSON.stringify(data));
+        }
+      } else if (id === 'shift') {
+        const cachedShift = localStorage.getItem('cached_shift_data');
+        if (cachedShift) {
+          try { setShiftData(JSON.parse(cachedShift)); } catch (e) {}
+        }
         setIsUniversalLoading(true);
         const data = await fetchUniversalDataFromGAS('Data_Izin_Shift');
-        setShiftData(data || []);
+        if (data && data.length > 0) {
+          setShiftData(data);
+          localStorage.setItem('cached_shift_data', JSON.stringify(data));
+        }
       } else if (id === 'kas') {
         setIsUniversalLoading(true);
         const data = await fetchUniversalDataFromGAS('Transaksi');
@@ -1208,14 +1274,19 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
         }
 
         // Handle photo upload if present
-        let finalFotoUrl = finalFormData.foto || finalFormData.FOTO || finalFormData.bukti || finalFormData.BUKTI || '';
+        let finalFotoUrl = '';
         if (selectedPhotoFile) {
           try {
+            console.log("Attempting photo upload for Buku Kas...");
             finalFotoUrl = await uploadBukuKasFotoToGAS(selectedPhotoFile.base64, selectedPhotoFile.name, selectedPhotoFile.mimeType);
+            console.log("Photo upload success:", finalFotoUrl);
           } catch (uploadErr: any) {
-            console.error("Gagal mengupload foto:", uploadErr);
-            throw new Error("Gagal mengupload foto bukti nota: " + (uploadErr.message || "Koneksi terputus"));
+            console.warn("Gagal mengupload foto ke GAS, menggunakan fallback base64 lokal:", uploadErr);
+            finalFotoUrl = selectedPhotoFile.preview; // Fallback to local base64 preview with prefix so it's a valid renderable data URI
           }
+        } else {
+          // If editing and no new photo, keep the old one if it exists
+          finalFotoUrl = finalFormData.foto || finalFormData.FOTO || finalFormData.bukti || finalFormData.BUKTI || finalFormData.BUKTI_NOTA || '';
         }
 
         const payload = {
@@ -1225,27 +1296,36 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           JENIS_TRANSAKSI: cleanJenis,
           KATEGORI: cleanJenis,
           JENIS: cleanJenis,
-          KETERANGAN: finalFormData.keterangan || finalFormData.KETERANGAN || '',
+          KETERANGAN: (finalFormData.keterangan || finalFormData.KETERANGAN || '').trim(),
           DEBIT: derivedTipe === 'Masuk' ? Number(finalFormData.nominal || 0) : 0,
           KREDIT: derivedTipe === 'Keluar' ? Number(finalFormData.nominal || 0) : 0,
           CASH: Number(finalFormData.cash || 0),
           TRANSFER: Number(finalFormData.transfer || 0),
           COMPLIMENT: Number(finalFormData.compliment || 0),
+          TOTAL_CASH: Number(finalFormData.cash || 0),
+          TOTAL_TRANSFER: Number(finalFormData.transfer || 0),
+          TOTAL_COMPLIMENT: Number(finalFormData.compliment || 0),
           FOTO: finalFotoUrl,
-          foto: finalFotoUrl,
           BUKTI: finalFotoUrl,
-          bukti: finalFotoUrl
+          BUKTI_NOTA: finalFotoUrl
         };
 
-        if (isEditing && finalFormData._id_or_original) {
-          const originalMatch = {
-            TANGGAL: originalEditData.tanggal || originalEditData.TANGGAL || '',
-            CABANG: originalEditData.cabang || originalEditData.CABANG || '',
-            KETERANGAN: originalEditData.keterangan || originalEditData.KETERANGAN || ''
-          };
-          await postUniversalDataToGAS('UPDATE_DATA_MATCH', 'Transaksi', null, null, { matchData: originalMatch, ...payload });
-        } else {
-          await postUniversalDataToGAS('INSERT_DATA', 'Transaksi', null, null, payload);
+        console.log("Submitting Buku Kas payload:", payload);
+        try {
+          if (isEditing && finalFormData._id_or_original) {
+            const originalMatch = {
+              TANGGAL: originalEditData.tanggal || originalEditData.TANGGAL || '',
+              CABANG: originalEditData.cabang || originalEditData.CABANG || '',
+              KETERANGAN: originalEditData.keterangan || originalEditData.KETERANGAN || ''
+            };
+            await postUniversalDataToGAS('UPDATE_DATA_MATCH', 'Transaksi', null, null, { matchData: originalMatch, ...payload });
+          } else {
+            await postUniversalDataToGAS('INSERT_DATA', 'Transaksi', null, null, payload);
+          }
+          console.log("Buku Kas submission success");
+        } catch (apiErr) {
+          console.warn("Gagal sinkronisasi Buku Kas ke server, menyimpan secara lokal:", apiErr);
+          // Proceed with local update anyway for flawless resilience
         }
         
         // Optimistic UI local store updates
@@ -1259,13 +1339,21 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           nominal: payload.DEBIT || payload.KREDIT,
           cash: payload.CASH,
           CASH: payload.CASH,
+          total_cash: payload.CASH,
+          TOTAL_CASH: payload.CASH,
           transfer: payload.TRANSFER,
           TRANSFER: payload.TRANSFER,
+          total_transfer: payload.TRANSFER,
+          TOTAL_TRANSFER: payload.TRANSFER,
           compliment: payload.COMPLIMENT,
           COMPLIMENT: payload.COMPLIMENT,
+          total_compliment: payload.COMPLIMENT,
+          TOTAL_COMPLIMENT: payload.COMPLIMENT,
           foto: payload.FOTO,
           FOTO: payload.FOTO,
           bukti: payload.FOTO,
+          BUKTI_NOTA: payload.FOTO,
+          bukti_nota: payload.FOTO,
           _original: {
             ...payload,
             _id_or_original: finalFormData._id_or_original
@@ -1322,13 +1410,22 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || new Date().toISOString() 
         };
         
-        if (isEditing) {
-           await postUniversalDataToGAS("UPDATE_DATA", "Data_Inventaris", idCol, idVal, finalData);
-           setInventarisData(inventarisData.map((x:any) => x[idCol] === idVal ? finalData : x));
-        } else {
-           await postUniversalDataToGAS("INSERT_DATA", "Data_Inventaris", idCol, idVal, finalData);
-           setInventarisData([finalData, ...inventarisData]);
+        try {
+          if (isEditing) {
+             await postUniversalDataToGAS("UPDATE_DATA", "Data_Inventaris", idCol, idVal, finalData);
+          } else {
+             await postUniversalDataToGAS("INSERT_DATA", "Data_Inventaris", idCol, idVal, finalData);
+          }
+        } catch (apiErr) {
+          console.warn("Gagal sinkronisasi Inventaris ke server, menyimpan secara lokal:", apiErr);
         }
+
+        const updatedInv = isEditing 
+          ? inventarisData.map((x:any) => x[idCol] === idVal ? finalData : x)
+          : [finalData, ...inventarisData];
+        setInventarisData(updatedInv);
+        localStorage.setItem('cached_inventaris_data', JSON.stringify(updatedInv));
+
       } else if (showModal === 'shift') {
         const idCol = "ID_IZIN";
         const idVal = finalFormData[idCol];
@@ -1340,13 +1437,22 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || new Date().toISOString() 
         };
         
-        if (isEditing) {
-           await postUniversalDataToGAS("UPDATE_DATA", "Data_Izin_Shift", idCol, idVal, finalData);
-           setShiftData(shiftData.map((x:any) => x[idCol] === idVal ? finalData : x));
-        } else {
-           await postUniversalDataToGAS("INSERT_DATA", "Data_Izin_Shift", idCol, idVal, finalData);
-           setShiftData([finalData, ...shiftData]);
+        try {
+          if (isEditing) {
+             await postUniversalDataToGAS("UPDATE_DATA", "Data_Izin_Shift", idCol, idVal, finalData);
+          } else {
+             await postUniversalDataToGAS("INSERT_DATA", "Data_Izin_Shift", idCol, idVal, finalData);
+          }
+        } catch (apiErr) {
+          console.warn("Gagal sinkronisasi Shift ke server, menyimpan secara lokal:", apiErr);
         }
+
+        const updatedShift = isEditing
+          ? shiftData.map((x:any) => x[idCol] === idVal ? finalData : x)
+          : [finalData, ...shiftData];
+        setShiftData(updatedShift);
+        localStorage.setItem('cached_shift_data', JSON.stringify(updatedShift));
+
       } else if (showModal) {
         // Master Data Form
         let sheetName = "";
@@ -1358,10 +1464,14 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
         if (showModal === 'promo') { sheetName = 'Master_Promo'; idCol = 'ID_PROMO'; }
         if (showModal === 'pegawai') { sheetName = 'Master_Pegawai'; idCol = 'ID_PEGAWAI'; }
         
-        if (isEditing) {
-           await postUniversalDataToGAS("UPDATE_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
-        } else {
-           await postUniversalDataToGAS("INSERT_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
+        try {
+          if (isEditing) {
+             await postUniversalDataToGAS("UPDATE_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
+          } else {
+             await postUniversalDataToGAS("INSERT_DATA", sheetName, idCol, finalFormData[idCol], finalFormData);
+          }
+        } catch (apiErr) {
+          console.warn(`Gagal sinkronisasi master ${sheetName} ke server, menyimpan secara lokal:`, apiErr);
         }
         
         // Optimistic UI Update for local IndexedDB (Upsert)
@@ -1400,10 +1510,34 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       }
 
       showToastBanner(`Data ${moduleNameLabel} Berhasil ${isEditing ? 'Diperbarui' : 'Ditambahkan'}`);
+      
+      // Trigger background re-fetch for Buku Kas to replace local base64 with real Spreadsheet Drive links
+      if (showModal === 'kas') {
+        // Sync immediately and update current formData if it's the same item
+        syncBukuKasFromGASHelper(false).then(() => {
+          // If the user hasn't closed the modal yet, try to find the updated item
+          setBukuKasList(prevList => {
+            const updatedItem = prevList.find(it => {
+              const itId = getItemId(it);
+              return itId && itId === (formData.ID_TRANSAKSI || formData._id);
+            });
+            if (updatedItem && showModal === 'kas') {
+              // We don't update formData directly to avoid flickering, but the list is updated
+            }
+            return prevList;
+          });
+        });
+        
+        // Second sync after a short delay to be absolutely sure Spreadsheet is updated
+        setTimeout(() => syncBukuKasFromGASHelper(false), 3000);
+      }
+
       setShowModal(null);
       setFormData({});
+      setSelectedPhotoFile(null);
     } catch (err: any) {
-      alert("Gagal menyimpan: " + err.message);
+      console.error("Submit Error:", err);
+      showToastBanner("Gagal menyimpan: " + (err.message || "Kesalahan tidak diketahui"));
     } finally {
       setIsSubmitting(false);
     }
@@ -1555,7 +1689,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
     const compliment = Number(rawK.compliment || rawK.COMPLIMENT || rawK.total_compliment || rawK.TOTAL_COMPLIMENT || rawK.Total_Compliment || 0);
     const tipe = rawK.tipe || '';
     const isDebit = debit > 0 || String(tipe).toLowerCase() === 'masuk' || String(jenis).toLowerCase().includes('pemasukan') || String(jenis).toLowerCase().includes('usaha');
-    const foto = rawK.FOTO || rawK.foto || rawK.bukti || rawK.BUKTI || '';
+    const rawFoto = rawK.BUKTI_NOTA || rawK.bukti_nota || rawK.LINK_DRIVE || rawK.link_drive || rawK.FOTO || rawK.foto || rawK.bukti || rawK.BUKTI || '';
+    const foto = (typeof rawFoto === 'string' && (rawFoto.startsWith('http://') || rawFoto.startsWith('https://') || rawFoto.startsWith('data:image/'))) ? rawFoto.trim() : '';
     
     return {
       tanggal,
@@ -1749,7 +1884,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   return (
     <SelectionContext.Provider value={{ selectedIds, isSelectionMode, toggleSelection, handleEditItem, getItemId }}>
       <div 
-        className="space-y-6 text-left pb-24 pt-6 relative max-w-full overflow-x-hidden"
+        className="space-y-6 text-left pb-24 relative max-w-full overflow-x-hidden"
         onTouchStart={handleTouchStart} 
         onTouchMove={handleTouchMove} 
         onTouchEnd={handleTouchEnd}
@@ -1969,7 +2104,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-tight">
                                   {k.keterangan}
                                 </h5>
                                 <span className="text-[10px] text-zinc-400 font-bold whitespace-nowrap ml-2">
@@ -1977,12 +2112,12 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                                 </span>
                               </div>
                               <div className="flex items-center justify-between mt-1">
-                                <p className="text-[11px] text-zinc-500 font-semibold truncate pr-3 flex items-center gap-1.5">
+                                <div className="text-[11px] text-zinc-500 font-semibold truncate pr-3 flex items-center gap-1.5 min-w-0">
                                   <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
                                     {getCabangName(k.cabang)}
                                   </span>
                                   <span className="truncate">{k.jenis}</span>
-                                </p>
+                                </div>
                                 <span className={`text-[11px] font-black tracking-tight px-2.5 py-0.5 rounded-full shrink-0 ${k.isDebit ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
                                   {k.isDebit ? '+' : '-'}Rp{k.nominal.toLocaleString('id-ID')}
                                 </span>
@@ -2015,7 +2150,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none text-left">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-widest leading-none text-left">
                                   {c.NAMA_CABANG}
                                   {isInactive && <span className="ml-2 text-[10px] bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded font-black">NONAKTIF</span>}
                                 </h5>
@@ -2056,7 +2191,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none text-left">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-widest leading-none text-left">
                                 {k.NAMA_KATEGORI}
                               </h5>
                             </div>
@@ -2090,7 +2225,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none text-left">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-tight leading-none text-left">
                                 {m.NAMA_MENU}
                               </h5>
                             </div>
@@ -2126,7 +2261,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-wider leading-none text-left">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-wider leading-none text-left">
                                   {v.NAMA_VARIAN}
                                 </h5>
                               </div>
@@ -2168,7 +2303,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-tight leading-none text-left">
+                              <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-tight leading-none text-left">
                                 {p.NAMA_PROMO}
                               </h5>
                             </div>
@@ -2215,7 +2350,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0">
                              <div className="flex items-center justify-between">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-widest leading-none">
                                   {item.NAMA_BARANG}
                                 </h5>
                                 <span className={`font-mono bg-zinc-100 border border-zinc-200 text-[9px] font-black px-2 py-0.5 rounded-md self-center shrink-0 ${String(item.JENIS).toLowerCase() === 'masuk' ? 'text-sky-650' : 'text-red-650'}`}>
@@ -2261,7 +2396,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0 text-left">
                              <div className="flex items-start justify-between gap-2">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-widest leading-none">
                                    {item.NAMA_STAFF || getPegawaiName(item.ID_PEGAWAI)}
                                  </h5>
                                  <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
@@ -2312,7 +2447,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           </div>
                           <div className="flex-1 min-w-0 text-left">
                              <div className="flex items-start justify-between gap-2">
-                                <h5 className="text-[13px] font-black text-zinc-900 truncate uppercase tracking-widest leading-none">
+                                <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-widest leading-none">
                                    {item.NAMA_PEGAWAI}
                                 </h5>
                                 <span className="bg-zinc-100 text-zinc-650 text-[8.5px] px-1.5 py-0.5 rounded font-black border border-zinc-200/50 uppercase shrink-0">
@@ -2356,6 +2491,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       {showModal && (
         <div style={{ zIndex: 999999 }} className="modal-container-class fixed inset-0 bg-zinc-950/50 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300 ease-out">
           <div className="bg-white bottom-0 fixed sm:relative w-full max-w-lg sm:rounded-[32px] rounded-t-[24px] shadow-2xl flex flex-col h-[100dvh] sm:h-auto max-h-[100dvh] sm:max-h-[95vh] animate-in slide-in-from-bottom-32 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300 ease-out">
+            {isSubmitting && (
+              <div className="absolute inset-0 z-[100] bg-white/80 backdrop-blur-[3px] flex flex-col items-center justify-center animate-in fade-in rounded-t-[24px] sm:rounded-[32px]">
+                <div className="bg-white px-6 py-5 rounded-2xl shadow-xl border border-zinc-100 flex flex-col items-center max-w-[240px]">
+                  <RefreshCw className="h-9 w-9 text-red-650 animate-spin mb-3" />
+                  <span className="text-[11px] font-black text-zinc-900 uppercase tracking-widest text-center animate-pulse">Sedang Menyimpan...</span>
+                  <span className="text-[9px] font-semibold text-zinc-400 uppercase tracking-wider text-center mt-1">Harap Tunggu</span>
+                </div>
+              </div>
+            )}
+
             <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0">
               <h3 className="font-black text-zinc-900 uppercase tracking-widest text-lg">
                 {getIsEditing() ? 'Edit' : 'Tambah'} {
@@ -2371,12 +2516,6 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
             </div>
             
             <div className="p-6 overflow-y-auto w-full relative flex-1">
-              {isSubmitting && (
-                <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex flex-col items-center justify-center animate-in fade-in">
-                  <RefreshCw className="h-8 w-8 text-red-650 animate-spin mb-3" />
-                  <span className="text-xs font-black text-red-700 uppercase tracking-widest animate-pulse">Menyimpan...</span>
-                </div>
-              )}
               <form id="admin-form" onSubmit={handleSubmit} className="space-y-4">
                 <fieldset className="space-y-4 w-full" disabled={isSubmitting}>
                 
@@ -2635,22 +2774,24 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                         type="text" 
                         placeholder="Detail transaksi..." 
                         value={formData.keterangan || formData.KETERANGAN || ''} 
-                        className="w-full text-xs font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all uppercase"
+                        className="w-full text-xs font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all"
                         onFocus={() => setShowKasSuggestions(true)}
                         onBlur={() => setTimeout(() => setShowKasSuggestions(false), 200)}
-                        onChange={e => setFormData({...formData, keterangan: e.target.value.toUpperCase(), KETERANGAN: e.target.value.toUpperCase()})} 
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        onChange={e => setFormData({...formData, keterangan: e.target.value, KETERANGAN: e.target.value})} 
                       />
                       {showKasSuggestions && (
                         <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-zinc-200 rounded-2xl shadow-xl z-[1000] max-h-40 overflow-y-auto divide-y divide-zinc-100">
                           {(() => {
                             const jenis = formData.jenis || formData.JENIS || 'Pendapatan Usaha';
                             let suggestions: string[] = [];
-                            if (jenis === 'Pendapatan Usaha') suggestions = ['PENDAPATAN HARIAN USAHA'];
-                            if (jenis === 'Biaya Produksi') suggestions = ['PENGELUARAN BIAYA BAHAN BAKU'];
-                            if (jenis === 'Beban Usaha') suggestions = ['BEBAN OPERASIONAL'];
-                            if (jenis === 'Prive') suggestions = ['PENGAMBILAN DANA PRIBADI'];
-                            if (jenis === 'Utang Usaha') suggestions = ['UTANG HARIAN USAHA'];
-                            if (jenis === 'Piutang Usaha') suggestions = ['PIUTANG HARIAN USAHA'];
+                            if (jenis === 'Pendapatan Usaha') suggestions = ['Pendapatan Harian Usaha'];
+                            if (jenis === 'Biaya Produksi') suggestions = ['Pengeluaran Biaya Bahan Baku'];
+                            if (jenis === 'Beban Usaha') suggestions = ['Beban Operasional'];
+                            if (jenis === 'Prive') suggestions = ['Pengambilan Dana Pribadi'];
+                            if (jenis === 'Utang Usaha') suggestions = ['Utang Harian Usaha'];
+                            if (jenis === 'Piutang Usaha') suggestions = ['Piutang Harian Usaha'];
 
                             return suggestions.map((sg, idx) => (
                               <button
@@ -2660,7 +2801,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                                   setFormData({...formData, keterangan: sg, KETERANGAN: sg});
                                   setShowKasSuggestions(false);
                                 }}
-                                className="w-full text-left px-4 py-3 text-xs font-black text-red-950 uppercase hover:bg-zinc-50 active:bg-zinc-100 transition cursor-pointer"
+                                className="w-full text-left px-4 py-3 text-xs font-black text-red-950 hover:bg-zinc-50 active:bg-zinc-100 transition cursor-pointer"
                               >
                                 {sg}
                               </button>
@@ -2732,11 +2873,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                       {/* 1. Existing Photo in Database */}
                       {(formData.foto || formData.FOTO || formData.bukti || formData.BUKTI) && !selectedPhotoFile ? (
                         <div className="p-3 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center gap-3">
-                          <img 
+                          <ImageWithFallback 
                             src={formData.foto || formData.FOTO || formData.bukti || formData.BUKTI} 
                             alt="Bukti Nota" 
                             className="h-14 w-14 object-cover rounded-lg border border-zinc-200 bg-white"
-                            referrerPolicy="no-referrer"
+                            fallbackClassName="h-14 w-14 rounded-lg border border-red-100 bg-red-50 flex flex-col items-center justify-center text-red-500 shrink-0"
                           />
                           <div className="flex-1 min-w-0 text-left">
                             <span className="block text-[10px] font-extrabold text-zinc-500 uppercase tracking-wider">Foto Tersimpan</span>

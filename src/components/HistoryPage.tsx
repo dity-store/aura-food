@@ -19,6 +19,7 @@ interface HistoryPageProps {
   activeBranch: string; // If 'ADMIN', show branch filter and hide "Cetak Struk", show details
   cabangList: Cabang[];
   onSelectTransaction: (tx: Transaction) => void;
+  onSuccessPrint?: (tx: Transaction) => void;
   onBack: () => void;
   onCreateTransaction?: () => void;
   refreshTrigger?: number;
@@ -39,7 +40,7 @@ const getDefaultFilterState = (initialBranchFilter?: string): HistoryFilterState
 let historyInitialFetchDone = new Set<string>();
 let historyFetchingInProgress = new Set<string>();
 
-export default function HistoryPage({ activeBranch, cabangList, onSelectTransaction, onBack, onCreateTransaction, refreshTrigger, initialBranchFilter }: HistoryPageProps) {
+export default function HistoryPage({ activeBranch, cabangList, onSelectTransaction, onSuccessPrint, onBack, onCreateTransaction, refreshTrigger, initialBranchFilter }: HistoryPageProps) {
   const [history, setHistory] = useState<Transaction[]>([]);
   const [isSearchHistoryActive, setIsSearchHistoryActive] = useState<boolean>(false);
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
@@ -427,6 +428,11 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                             <span className="text-[10px] text-red-750 font-bold hover:underline inline-flex items-center gap-0.5 transition">
                               {activeBranch === 'ADMIN' ? 'Lihat Detail Pesanan' : 'Lihat Cetak Struk'}
                             </span>
+                            {tx.pesanan?.CATATAN && (
+                              <p className="text-[9px] text-zinc-500 italic mt-1.5 border-l-2 border-zinc-200 pl-2 max-w-[200px] truncate">
+                                "{tx.pesanan.CATATAN}"
+                              </p>
+                            )}
                           </div>
                           <div className="text-right">
                              <p className="text-sm font-black text-zinc-950 whitespace-nowrap">
@@ -625,6 +631,14 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                         <span className="text-base font-black text-red-700">Rp{historyModalTx.totalAmount.toLocaleString('id-ID')}</span>
                       </div>
                     </div>
+                    {historyModalTx.pesanan?.CATATAN && (
+                      <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
+                        <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-1">Catatan Pesanan</p>
+                        <p className="text-xs text-zinc-700 bg-zinc-50 p-3 rounded-xl border border-zinc-100 leading-relaxed italic">
+                          "{historyModalTx.pesanan.CATATAN}"
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -638,7 +652,17 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
             
             {activeBranch !== 'ADMIN' && (
               <div className="p-4 border-t border-zinc-200 bg-zinc-50">
-                <button className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" onClick={() => onSelectTransaction(historyModalTx)}>
+                <button 
+                  className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" 
+                  onClick={() => {
+                    if (onSuccessPrint) {
+                      onSuccessPrint(historyModalTx);
+                      setHistoryModalTx(null);
+                    } else {
+                      onSelectTransaction(historyModalTx);
+                    }
+                  }}
+                >
                   Cetak Struk Sekarang
                 </button>
               </div>

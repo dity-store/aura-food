@@ -390,6 +390,67 @@ function doPost(e) {
       return jsonResponse({ status: "success", message: `Rekap untuk tanggal ${tanggalTarget} selesai` });
     }
 
+    if (payload.mode === "UPLOAD_BUKTI_TRANSAKSI" || payload.mode === "UPLOAD_BUKTI_KAS") {
+      const { base64Data, idCabang, idTransaksi, jenisTransaksi, ekstensiFile, filename, mimeType } = payload;
+      let namaC = "Semua";
+      if (idCabang !== "ALL" && idCabang !== "ADMIN") {
+        const c = getSheetDataAsJSON("Master_Cabang").find(x => isSameId(x.ID_CABANG, idCabang));
+        if (c) namaC = c.NAMA_CABANG;
+      }
+      const dNow = new Date();
+      const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+      const dN = ["MINGGU", "SENIN", "SELASA", "RABU", "KAMIS", "JUMAT", "SABTU"];
+      const namaHari = dN[dNow.getDay()];
+      
+      const root = getOrCreateFolder(DriveApp.getFolderById(ROOT_FOLDER_ID), "Invoice & Struk");
+      const fThn = getOrCreateFolder(root, Utilities.formatDate(dNow, ZONA_WAKTU, "yyyy"));
+      const fBln = getOrCreateFolder(fThn, mN[dNow.getMonth()]);
+      const fCab = getOrCreateFolder(fBln, namaC);
+      
+      let targetFolder = fCab;
+      let targetJenis = jenisTransaksi || (payload.mode === "UPLOAD_BUKTI_KAS" ? "Buku Kas" : "Bukti Transaksi Umum");
+      if (String(targetJenis).toUpperCase() === "PENDAPATAN HARIAN USAHA") {
+        targetFolder = getOrCreateFolder(fCab, "Struk " + mN[dNow.getMonth()]);
+      } else {
+        targetFolder = getOrCreateFolder(fCab, targetJenis);
+      }
+
+      let formatTanggal = Utilities.formatDate(dNow, ZONA_WAKTU, "ddMMyyyy_HHmm");
+      let targetId = idTransaksi || filename || "DOC";
+      let ext = ekstensiFile || (mimeType ? mimeType.split('/')[1] : 'jpg');
+      const fileName = `${formatTanggal}_${targetId}_${namaHari}.${ext}`;
+      
+      let mimeTypeTarget = ext === 'pdf' ? 'application/pdf' : (ext === 'png' ? 'image/png' : 'image/jpeg');
+
+      let cleanBase64 = String(base64Data);
+      if (cleanBase64.indexOf("base64,") !== -1) cleanBase64 = cleanBase64.split("base64,")[1];
+      else if (cleanBase64.indexOf(",") !== -1) cleanBase64 = cleanBase64.split(",")[1];
+
+      const file = targetFolder.createFile(Utilities.newBlob(Utilities.base64Decode(cleanBase64), mimeTypeTarget, fileName));
+      const fileUrl = file.getUrl();
+
+      if (idTransaksi) {
+        const sheetTrans = ss.getSheetByName("Transaksi");
+        if (sheetTrans) {
+          const dataTrans = sheetTrans.getDataRange().getValues();
+          const headers = dataTrans[0].map(h => String(h).trim().toUpperCase());
+          let idCol = headers.indexOf("ID_TRANSAKSI") !== -1 ? headers.indexOf("ID_TRANSAKSI") : (headers.indexOf("ID TRANSAKSI") !== -1 ? headers.indexOf("ID TRANSAKSI") : 1);
+          let linkCol = headers.indexOf("BUKTI_NOTA");
+          if (linkCol === -1) linkCol = headers.indexOf("LINK_DRIVE");
+          
+          if (linkCol !== -1) {
+            for (let i = 1; i < dataTrans.length; i++) {
+              if (isSameId(dataTrans[i][idCol], idTransaksi)) {
+                sheetTrans.getRange(i + 1, linkCol + 1).setValue(fileUrl);
+                break;
+              }
+            }
+          }
+        }
+      }
+      return jsonResponse({ status: "success", url: fileUrl });
+    }
+
     if (payload.mode === "UPLOAD_RECEIPT") {
       const { idPesanan, totalTagihan, idCabang, pdfBase64, tanggalWaktu } = payload;
       let namaC = idCabang;

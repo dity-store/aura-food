@@ -86,7 +86,19 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     }
   });
   
-  const [loadingMetrics, setLoadingMetrics] = useState<boolean>(false);
+  const [loadingMetrics, setLoadingMetrics] = useState<boolean>(() => {
+    const initialBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
+    const initialDate = session.filters.dashboard?.selectedAdminDate || localStorage.getItem('AURA_DASHBOARD_FILTER_DATE') || getTodayLocalDateStr();
+    const cacheKey = `cached_dashboard_metrics_${initialBranch}_${initialDate}`;
+    
+    if (session.dashboard.data) return false;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      return !cached;
+    } catch {
+      return true;
+    }
+  });
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [isTriggeringRekap, setIsTriggeringRekap] = useState(false);
   const [showConfirmRekap, setShowConfirmRekap] = useState(false);
@@ -197,20 +209,135 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       } catch (e) {}
     }
 
+    // Reset metrics before fetching to ensure we don't show stale/monthly data
+    setAdminMetrics(null);
     setLoadingMetrics(true);
     setMetricsError(null);
+    
+    lastFetchParamsRef.current = currentParamsKey;
 
     if (activeBranch === 'ADMIN') {
       try {
         const apiBranchId = selectedAdminBranch === 'Semua' ? 'All' : selectedAdminBranch;
         const metrics = await getAdminDashboardMetrics(apiBranchId, selectedAdminDate);
-        setAdminMetrics(metrics);
-        localStorage.setItem(cacheKey, JSON.stringify(metrics));
-        lastFetchParamsRef.current = currentParamsKey;
-        setSessionDashboard(currentParamsKey, metrics);
+        
+        // Final double check: only set if the params haven't changed while fetching
+        if (lastFetchParamsRef.current === currentParamsKey) {
+          setAdminMetrics(metrics);
+          
+          // Populate allTransactions with the daily data from server
+          if (metrics.recentTransactions) {
+            setAllTransactions(metrics.recentTransactions);
+          }
+          
+          localStorage.setItem(cacheKey, JSON.stringify(metrics));
+          setSessionDashboard(currentParamsKey, metrics);
+        }
       } catch (err: any) {
-        console.error("Gagal memuat metrik dashboard admin dari GAS:", err);
-        setMetricsError(err.message || "Gagal menghubungi server Web App.");
+        console.error("Gagal memuat metrik dashboard admin dari GAS, menghitung metrik lokal:", err);
+        try {
+          const txsLocal = await getTransactions();
+          const currentDateStr = selectedAdminDate;
+          const currentTransactions = txsLocal.filter(tx => {
+            const apiBranchId = selectedAdminBranch === 'Semua' ? 'All' : selectedAdminBranch;
+            if (apiBranchId !== 'All' && String(tx.cabang) !== String(apiBranchId)) {
+              return false;
+            }
+            try {
+              if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
+                return tx.timestamp.substring(0, 10) === currentDateStr;
+              }
+              const d = new Date(tx.timestamp);
+              const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              return dStr === currentDateStr;
+            } catch {
+              return false;
+            }
+          });
+
+          const revenue = currentTransactions.reduce((sum, tx) => {
+            const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+            if (isCompliment) return sum;
+            return sum + (tx.totalAmount || 0);
+          }, 0);
+          const transCount = currentTransactions.length;
+          const avg = transCount > 0 ? Math.round(revenue / transCount) : 0;
+          
+          let makSales = 0, minSales = 0, pasSales = 0, speSales = 0;
+          currentTransactions.forEach(tx => {
+            tx.detail?.forEach(item => {
+              const nm = String(item.NAMA_MENU || '').toLowerCase();
+              if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) {
+                pasSales += item.QTY || 1;
+              } else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) {
+                speSales += item.QTY || 1;
+              } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh') || nm.includes('yakult') || nm.includes('matcha') || nm.includes('squash') || nm.includes('chocolate')) {
+                minSales += item.QTY || 1;
+              } else {
+                makSales += item.QTY || 1;
+              }
+            });
+          });
+
+          let yesterdayRevenueObj = 0;
+          try {
+            const currentDate = new Date(selectedAdminDate);
+            currentDate.setDate(currentDate.getDate() - 1);
+            const yr = currentDate.getFullYear();
+            const mo = String(currentDate.getMonth() + 1).padStart(2, '0');
+            const dy = String(currentDate.getDate()).padStart(2, '0');
+            const yesterdayDateStr = `${yr}-${mo}-${dy}`;
+            
+            const yesterdayTransactions = txsLocal.filter(tx => {
+              const apiBranchId = selectedAdminBranch === 'Semua' ? 'All' : selectedAdminBranch;
+              if (apiBranchId !== 'All' && String(tx.cabang) !== String(apiBranchId)) {
+                return false;
+              }
+              try {
+                const d = new Date(tx.timestamp);
+                const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                return dStr === yesterdayDateStr;
+              } catch { return false; }
+            });
+            yesterdayRevenueObj = yesterdayTransactions.reduce((sum, tx) => {
+              const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+              if (isCompliment) return sum;
+              return sum + (tx.totalAmount || 0);
+            }, 0);
+          } catch (e) {}
+
+          let localTotalCash = 0;
+          let localTotalTransfer = 0;
+          currentTransactions.forEach(tx => {
+            const isCompliment = String(tx.pesanan?.JENIS_PESANAN || '').toUpperCase() === 'COMPLIMENT';
+            if (isCompliment) return;
+            
+            const method = String(tx.paymentMethod || '').toUpperCase();
+            if (method === 'CASH' || method === 'TUNAI') {
+              localTotalCash += tx.totalAmount || 0;
+            } else {
+              localTotalTransfer += tx.totalAmount || 0;
+            }
+          });
+
+          const fallbackMetrics = {
+            totalRevenue: revenue,
+            totalTransactions: transCount,
+            totalCash: localTotalCash,
+            totalTransfer: localTotalTransfer,
+            averageTransactionValue: avg,
+            categorySales: { Makanan: makSales, Minuman: minSales, Pasta: pasSales, Special: speSales },
+            recentTransactions: currentTransactions.slice(0, 10),
+            yesterdayRevenue: yesterdayRevenueObj
+          };
+
+          if (lastFetchParamsRef.current === currentParamsKey) {
+            setAdminMetrics(fallbackMetrics);
+            setAllTransactions(currentTransactions);
+          }
+        } catch (localErr) {
+          setMetricsError("Gagal memuat metrik admin dari GAS dan perhitungan lokal gagal.");
+        }
       } finally {
         setLoadingMetrics(false);
       }
@@ -264,15 +391,15 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         let makSales = 0, minSales = 0, pasSales = 0, speSales = 0;
         currentTransactions.forEach(tx => {
           tx.detail?.forEach(item => {
-            const nm = item.NAMA_MENU.toLowerCase();
+            const nm = String(item.NAMA_MENU || '').toLowerCase();
             if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) {
-              pasSales += item.QTY;
+              pasSales += item.QTY || 1;
             } else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) {
-              speSales += item.QTY;
-            } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh')) {
-              minSales += item.QTY;
+              speSales += item.QTY || 1;
+            } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh') || nm.includes('yakult') || nm.includes('matcha') || nm.includes('squash') || nm.includes('chocolate')) {
+              minSales += item.QTY || 1;
             } else {
-              makSales += item.QTY;
+              makSales += item.QTY || 1;
             }
           });
         });
@@ -368,23 +495,44 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     }
 
     // First, set from cache for instantaneous UI response (Optimistic load)
+    // But ONLY if the cache corresponds to the CURRENT filters
     if (cached) {
       try {
-        setAdminMetrics(JSON.parse(cached));
+        const parsed = JSON.parse(cached);
+        setAdminMetrics(parsed);
       } catch (e) {
         console.error(e);
+        setAdminMetrics(null);
       }
+    } else {
+      setAdminMetrics(null);
     }
     
-    // Then ALWAYS fetch fresh stats in the background silently, but honor identical filters to prevent loading spinner
+    // Then ALWAYS fetch fresh stats in the background
     loadStats(false);
     
   }, [activeBranch, selectedAdminBranch, selectedAdminDate]);
 
   const currentBranchFilter = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
   
+  const isServerAdmin = activeBranch === 'ADMIN' && adminMetrics !== null;
+
+  // Local logic configurations
+  const currentDateStr = selectedAdminDate;
+
+  // Recalculate Admin Stats locally to ensure strictly daily data
+  let adminFilteredTxs: Transaction[] = [];
+  
+  if (isServerAdmin && adminMetrics?.recentTransactions) {
+    adminFilteredTxs = adminMetrics.recentTransactions.filter(tx => {
+      // Cabang Filter
+      if (currentBranchFilter !== 'Semua' && String(tx.cabang) !== String(currentBranchFilter)) return false;
+      return true;
+    });
+  }
+  
   const getBranchBreakdown = () => {
-    if (!adminMetrics || !adminMetrics.recentTransactions) return [];
+    if (!adminFilteredTxs || adminFilteredTxs.length === 0) return [];
     
     // Group transactions by branch ID
     const grouped: { [key: string]: Transaction[] } = {};
@@ -392,7 +540,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       grouped[String(c.ID_CABANG)] = [];
     });
     
-    adminMetrics.recentTransactions.forEach(tx => {
+    adminFilteredTxs.forEach(tx => {
       const cbId = String(tx.cabang);
       if (!grouped[cbId]) {
         grouped[cbId] = [];
@@ -419,7 +567,64 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     return breakdown;
   };
 
+  
+  const transactions = allTransactions.filter(tx => {
+    // 1. Cabang Filter
+    if (currentBranchFilter !== 'Semua' && String(tx.cabang) !== String(currentBranchFilter)) {
+      return false;
+    }
+    
+    // 2. Date Filter
+    if (!tx.timestamp) return false;
+    try {
+      // Robust date parsing matching the backend logic
+      let txDateStr = '';
+      if (typeof tx.timestamp === 'string') {
+        if (tx.timestamp.includes('T')) {
+          txDateStr = tx.timestamp.substring(0, 10); // YYYY-MM-DD
+        } else {
+          // Try parsing non-ISO string
+          const d = new Date(tx.timestamp);
+          if (!isNaN(d.getTime())) {
+            txDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          } else if (tx.timestamp.includes('/')) {
+            // Manual parse for DD/MM/YYYY
+            const p = tx.timestamp.split(' ')[0].split('/');
+            if (p.length === 3) {
+              if (p[2].length === 4) txDateStr = `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+              else if (p[0].length === 4) txDateStr = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+            }
+          } else if (tx.timestamp.includes('-')) {
+            const p = tx.timestamp.split(' ')[0].split('-');
+            if (p.length === 3) {
+              if (p[2].length === 4) txDateStr = `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+              else if (p[0].length === 4) txDateStr = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+            }
+          }
+        }
+      } else if (tx.timestamp instanceof Date) {
+        const d = tx.timestamp;
+        txDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+      
+      return txDateStr === currentDateStr;
+    } catch {
+      return false;
+    }
+  });
 
+  const queueCount = currentBranchFilter === 'Semua'
+    ? allQueue.length
+    : allQueue.filter(item => item.payload?.cabang === currentBranchFilter).length;
+
+  // Decide source of metric values (whether to read from server-side adminMetrics or local calculated variables)
+
+  const totalRevenue = isServerAdmin 
+    ? (adminMetrics?.totalRevenue || 0)
+    : transactions.reduce((sum, tx) => {
+        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+        return isCompliment ? sum : sum + (tx.totalAmount || 0);
+      }, 0);
 
   const getRevenueGrowthStyles = () => {
     if (!adminMetrics) return { text: "0%", classes: "text-zinc-500 bg-zinc-50" };
@@ -438,48 +643,16 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const classes = diffPct >= 0 ? "text-emerald-600 bg-emerald-50" : "text-red-600 bg-red-50";
     return { text, classes };
   };
-  
-  // Local logic configurations
-  const currentDateStr = selectedAdminDate;
-  const transactions = allTransactions.filter(tx => {
-    if (currentBranchFilter !== 'Semua' && String(tx.cabang) !== String(currentBranchFilter)) {
-      return false;
-    }
-    try {
-      if (typeof tx.timestamp === 'string' && tx.timestamp.length >= 10 && tx.timestamp.includes('T')) {
-        return tx.timestamp.substring(0, 10) === currentDateStr;
-      }
-      const d = new Date(tx.timestamp);
-      const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      return dStr === currentDateStr;
-    } catch {
-      return false;
-    }
-  });
-
-  const queueCount = currentBranchFilter === 'Semua'
-    ? allQueue.length
-    : allQueue.filter(item => item.payload?.cabang === currentBranchFilter).length;
-
-  // Decide source of metric values (whether to read from server-side adminMetrics or local calculated variables)
-  const isServerAdmin = activeBranch === 'ADMIN' && adminMetrics !== null;
-
-  const totalRevenue = isServerAdmin 
-    ? adminMetrics!.totalRevenue 
-    : transactions.reduce((sum, tx) => {
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        return isCompliment ? sum : sum + (tx.totalAmount || 0);
-      }, 0);
 
   const totalTransactionsCount = isServerAdmin
-    ? adminMetrics!.totalTransactions
+    ? (adminMetrics?.totalTransactions || 0)
     : transactions.reduce((sum, tx) => {
         const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
         return isCompliment ? sum : sum + 1;
       }, 0);
 
   const totalCashVal = isServerAdmin
-    ? (adminMetrics!.totalCash || 0)
+    ? (adminMetrics?.totalCash || 0)
     : transactions.reduce((sum, tx) => {
         const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
         if (isCompliment) return sum;
@@ -488,7 +661,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       }, 0);
 
   const totalTransferVal = isServerAdmin
-    ? (adminMetrics!.totalTransfer || 0)
+    ? (adminMetrics?.totalTransfer || 0)
     : transactions.reduce((sum, tx) => {
         const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
         if (isCompliment) return sum;
@@ -497,7 +670,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
       }, 0);
 
   const avgTx = isServerAdmin
-    ? adminMetrics!.averageTransactionValue
+    ? (adminMetrics?.averageTransactionValue || 0)
     : (transactions.length > 0 ? Math.round(totalRevenue / transactions.length) : 0);
 
   // Recalculate categories
@@ -506,23 +679,23 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
   let pas = 0;
   let spe = 0;
 
-  if (isServerAdmin) {
-    mak = adminMetrics!.categorySales.Makanan;
-    min = adminMetrics!.categorySales.Minuman;
-    pas = adminMetrics!.categorySales.Pasta;
-    spe = adminMetrics!.categorySales.Special;
+  if (isServerAdmin && adminMetrics) {
+    mak = adminMetrics.categorySales.Makanan || 0;
+    min = adminMetrics.categorySales.Minuman || 0;
+    pas = adminMetrics.categorySales.Pasta || 0;
+    spe = adminMetrics.categorySales.Special || 0;
   } else {
     transactions.forEach(tx => {
       tx.detail?.forEach(item => {
-        const nm = item.NAMA_MENU.toLowerCase();
+        const nm = String(item.NAMA_MENU || '').toLowerCase();
         if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) {
-          pas += item.QTY;
+          pas += item.QTY || 1;
         } else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) {
-          spe += item.QTY;
-        } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh')) {
-          min += item.QTY;
+          spe += item.QTY || 1;
+        } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh') || nm.includes('yakult') || nm.includes('matcha') || nm.includes('squash') || nm.includes('chocolate')) {
+          min += item.QTY || 1;
         } else {
-          mak += item.QTY;
+          mak += item.QTY || 1;
         }
       });
     });
@@ -536,7 +709,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
 
   // Recent transactions to list
   const recentTxList = isServerAdmin 
-    ? adminMetrics!.recentTransactions 
+    ? adminFilteredTxs 
     : transactions;
 
   // Recount total menu items sold
@@ -559,6 +732,10 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
     const cName = currentBranch === 'Semua' ? 'Semua Cabang (Gabungan)' : (cabangList.find(c => String(c.ID_CABANG) === currentBranch)?.NAMA_CABANG || currentBranch);
     
+    let currentTotalRevenue = isServerAdmin ? (adminMetrics?.totalRevenue || 0) : (totalRevenue || 0);
+    let currentTotalCash = isServerAdmin ? (adminMetrics?.totalCash || 0) : (totalCashVal || 0);
+    let currentTotalTransfer = isServerAdmin ? (adminMetrics?.totalTransfer || 0) : (totalTransferVal || 0);
+    
     if (currentBranch === 'Semua' && activeBranch === 'ADMIN') {
       const breakdown = getBranchBreakdown();
       breakdown.forEach(b => {
@@ -574,7 +751,8 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
           }
           const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
           const complimentText = isCompliment ? ' (Compliment)' : '';
-          rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
+          const catatanText = tx.pesanan?.CATATAN ? ` [Ket: ${tx.pesanan.CATATAN}]` : '';
+          rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}${catatanText}\n`;
         });
       });
       breakdownText = `*Rincian Omset per Cabang:*\n` + breakdownText;
@@ -590,20 +768,40 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
         }
         const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
         const complimentText = isCompliment ? ' (Compliment)' : '';
-        rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}\n`;
+        const catatanText = tx.pesanan?.CATATAN ? ` [Ket: ${tx.pesanan.CATATAN}]` : '';
+        rincianPesananText += `${idx + 1}. [${formattedDate}] ${tx.id}: Rp${tx.totalAmount.toLocaleString('id-ID')}${complimentText}${catatanText}\n`;
       });
     }
 
     return `Halo, berikut adalah *Laporan Omset ${cName}*:\n\n` +
       `*Tanggal:* ${hari}, ${tglText}\n\n` +
-      `*Total Omset:* Rp${(totalRevenue || 0).toLocaleString('id-ID')}\n` +
-      `  ├ *Total Cash:* Rp${(totalCashVal || 0).toLocaleString('id-ID')}\n` +
-      `  └ *Total Transfer:* Rp${(totalTransferVal || 0).toLocaleString('id-ID')}\n\n` +
-      `*Total Pesanan:* ${(totalTransactionsCount || 0)} Selesai\n\n` +
+      `*Total Omset:* Rp${(currentTotalRevenue || 0).toLocaleString('id-ID')}\n` +
+      `  ├ *Total Cash:* Rp${(currentTotalCash || 0).toLocaleString('id-ID')}\n` +
+      `  └ *Total Transfer:* Rp${(currentTotalTransfer || 0).toLocaleString('id-ID')}\n\n` +
+      `*Total Pesanan:* ${(recentTxList.length || 0)} Selesai\n\n` +
       breakdownText +
       rincianPesananText + `\n` +
       `Terima kasih!`;
   };
+
+  if (loadingMetrics && !adminMetrics) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 animate-in fade-in duration-500">
+        <div className="relative">
+          <div className="h-16 w-16 border-4 border-zinc-100 border-t-red-600 rounded-full animate-spin"></div>
+          <div className="absolute inset-0 flex items-center justify-center">
+             <LayoutDashboard className="h-6 w-6 text-red-600/50" />
+          </div>
+        </div>
+        <div className="text-center space-y-2 px-6">
+          <h3 className="text-zinc-900 font-black uppercase tracking-widest text-sm">Menyiapkan Dashboard</h3>
+          <p className="text-zinc-500 text-xs font-medium max-w-[240px] mx-auto leading-relaxed">
+            Menyinkronkan data transaksi dan statistik operasional terbaru Anda...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -903,12 +1101,7 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
               recentTxList.slice(0, 3).map((tx) => (
                 <div 
                   key={tx.id}
-                  onClick={() => {
-                    if (onSelectTransaction) {
-                       onSelectTransaction(tx);
-                    }
-                  }}
-                  className="flex items-center justify-between p-3 rounded-xl border border-zinc-100 transition group hover:bg-zinc-50 cursor-pointer active:scale-95"
+                  className="flex items-center justify-between p-3 rounded-xl border border-zinc-100 transition group hover:bg-zinc-50"
                 >
                   <div className="flex items-center gap-3 truncate">
                     {tx.pesanan?.JENIS_PESANAN === 'Compliment' ? (
@@ -933,6 +1126,11 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                           {cabangList.find(c => String(c.ID_CABANG) === String(tx.cabang))?.NAMA_CABANG || `Cabang ${tx.cabang}`}
                         </span>
                       </p>
+                      {tx.pesanan?.CATATAN && (
+                        <p className="text-[9px] text-zinc-500 italic mt-1 line-clamp-1 border-l-2 border-zinc-200 pl-2">
+                          "{tx.pesanan.CATATAN}"
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1061,9 +1259,16 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                               }
                               const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
                               return (
-                                <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
-                                  <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
-                                  <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                                <div key={tx.id} className="flex flex-col pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
+                                  <div className="flex justify-between items-center">
+                                    <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
+                                    <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                                  </div>
+                                  {tx.pesanan?.CATATAN && (
+                                    <div className="text-[8px] text-zinc-400 italic pl-4 mb-0.5">
+                                      Catatan: {tx.pesanan.CATATAN}
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}
@@ -1090,9 +1295,16 @@ export default function AuraDashboard({ onNavigateToPOS, onNavigateToAdmin, onNa
                           }
                           const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
                           return (
-                            <div key={tx.id} className="flex justify-between items-center pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
-                              <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
-                              <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                            <div key={tx.id} className="flex flex-col pb-0.5 border-b border-dashed border-zinc-100 last:border-0 last:pb-0">
+                              <div className="flex justify-between items-center">
+                                <span>{idx + 1}. [{formattedDate}] {tx.id}</span>
+                                <span className="font-bold text-zinc-900 shrink-0">Rp{tx.totalAmount.toLocaleString('id-ID')}{isCompliment ? ' (Compliment)' : ''}</span>
+                              </div>
+                              {tx.pesanan?.CATATAN && (
+                                <div className="text-[8px] text-zinc-400 italic pl-4 mb-0.5">
+                                  Catatan: {tx.pesanan.CATATAN}
+                                </div>
+                              )}
                             </div>
                           );
                         })}

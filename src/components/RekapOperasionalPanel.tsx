@@ -35,32 +35,150 @@ interface RekapOperasionalPanelProps {
 
 type ReportPeriod = 'HARIAN' | 'BULANAN' | 'KUARTAL' | 'SEMESTER' | 'TAHUNAN';
 
+interface CalendarDate {
+  year: number;
+  month: number; // 0-11
+  date: number;  // 1-31
+}
+
+function getCalendarDate(dateVal: any): CalendarDate | null {
+  if (!dateVal) return null;
+  
+  if (dateVal instanceof Date) {
+    return {
+      year: dateVal.getFullYear(),
+      month: dateVal.getMonth(),
+      date: dateVal.getDate()
+    };
+  }
+
+  const num = Number(dateVal);
+  if (!isNaN(num) && num > 30000) {
+    const utcDate = new Date((num - 25569) * 86400 * 1000);
+    return {
+      year: utcDate.getUTCFullYear(),
+      month: utcDate.getUTCMonth(),
+      date: utcDate.getUTCDate()
+    };
+  }
+
+  const str = String(dateVal).trim();
+  
+  // Try matching YYYY-MM-DD
+  const yyyymmdd = str.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})/);
+  if (yyyymmdd) {
+    return {
+      year: parseInt(yyyymmdd[1], 10),
+      month: parseInt(yyyymmdd[2], 10) - 1,
+      date: parseInt(yyyymmdd[3], 10)
+    };
+  }
+
+  // Try matching DD/MM/YYYY
+  const ddmmyyyy = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})/);
+  if (ddmmyyyy) {
+    return {
+      year: parseInt(ddmmyyyy[3], 10),
+      month: parseInt(ddmmyyyy[2], 10) - 1,
+      date: parseInt(ddmmyyyy[1], 10)
+    };
+  }
+
+  // Fallback to standard JS parsing
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    if (str.includes('T')) {
+      return {
+        year: d.getUTCFullYear(),
+        month: d.getUTCMonth(),
+        date: d.getUTCDate()
+      };
+    }
+    return {
+      year: d.getFullYear(),
+      month: d.getMonth(),
+      date: d.getDate()
+    };
+  }
+
+  return null;
+}
+
 // Robust date parser matching existing systems
 function parseDateRobust(dateVal: any): Date | null {
-  if (!dateVal) return null;
-  if (dateVal instanceof Date) return dateVal;
-  if (!isNaN(Number(dateVal))) return new Date(Number(dateVal));
+  const cal = getCalendarDate(dateVal);
+  if (!cal) return null;
+  return new Date(cal.year, cal.month, cal.date);
+}
+
+function cleanAndParseNumber(val: any): number {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === 'number') return val;
+  const str = String(val).trim();
+  if (!str) return 0;
   
-  const str = String(dateVal).trim();
-  const parts = str.split(/[/\-.\s,T]+/);
-  if (parts.length >= 3) {
-    if (parts[2].length >= 4) { // DD/MM/YYYY
-      const d = parseInt(parts[0], 10);
-      const m = parseInt(parts[1], 10) - 1;
-      const y = parseInt(parts[2].substring(0, 4), 10);
-      const resObj = new Date(y, m, d);
-      if (!isNaN(resObj.getTime())) return resObj;
-    } else if (parts[0].length >= 4) { // YYYY-MM-DD
-      const y = parseInt(parts[0].substring(0, 4), 10);
-      const m = parseInt(parts[1], 10) - 1;
-      const d = parseInt(parts[2], 10);
-      const resObj = new Date(y, m, d);
-      if (!isNaN(resObj.getTime())) return resObj;
+  const cleanStr = str
+    .replace(/Rp/gi, '')
+    .replace(/\s/g, '');
+  
+  if (cleanStr.includes('.') && cleanStr.includes(',')) {
+    const standardStr = cleanStr.replace(/\./g, '').replace(/,/g, '.');
+    const num = parseFloat(standardStr);
+    return isNaN(num) ? 0 : num;
+  }
+  
+  if (cleanStr.includes('.')) {
+    const parts = cleanStr.split('.');
+    const lastPart = parts[parts.length - 1];
+    if (lastPart.length === 3) {
+      const standardStr = cleanStr.replace(/\./g, '');
+      const num = parseFloat(standardStr);
+      return isNaN(num) ? 0 : num;
+    } else {
+      const num = parseFloat(cleanStr);
+      return isNaN(num) ? 0 : num;
     }
   }
-  const dateObj = new Date(str);
-  if (!isNaN(dateObj.getTime())) return dateObj;
-  return null;
+  
+  if (cleanStr.includes(',')) {
+    const standardStr = cleanStr.replace(/,/g, '.');
+    const num = parseFloat(standardStr);
+    return isNaN(num) ? 0 : num;
+  }
+
+  const num = parseFloat(cleanStr);
+  return isNaN(num) ? 0 : num;
+}
+
+function getTransaksiKategori(t: any): string {
+  if (!t) return '';
+  let kat = '';
+  if (typeof t === 'object' && !Array.isArray(t)) {
+    const keys = Object.keys(t);
+    const foundKey = keys.find(k => {
+      const lower = k.toLowerCase().replace(/[\s_-]/g, '').trim();
+      return lower === 'jenis' || lower === 'jenistransaksi' || lower === 'kategori' || lower === 'jenis_transaksi' || lower === 'tipe_transaksi';
+    });
+    if (foundKey) {
+      kat = String(t[foundKey]).trim();
+    }
+  }
+  if (!kat) {
+    kat = t.JENIS || t.Kategori || t.kategori || t.jenis || (Array.isArray(t) ? t[2] || t[1] : '');
+  }
+  return String(kat || '').trim();
+}
+
+function getTransaksiDebit(t: any): number {
+  if (!t) return 0;
+  const raw = t.DEBIT ?? t.debit ?? t.Masuk ?? t.masuk ?? t.Pemasukan ?? t.pemasukan ?? (Array.isArray(t) ? t[4] : 0);
+  return cleanAndParseNumber(raw);
+}
+
+function getTransaksiKredit(t: any): number {
+  if (!t) return 0;
+  const raw = t.KREDIT ?? t.kredit ?? t.Keluar ?? t.keluar ?? t.Pengeluaran ?? t.pengeluaran ?? (Array.isArray(t) ? t[5] : 0);
+  return cleanAndParseNumber(raw);
 }
 
 function formatDateToLocalString(date: Date): string {
@@ -240,6 +358,12 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
       const date = String(dayDate.getDate()).padStart(2, '0');
       const dayStr = `${year}-${month}-${date}`; // YYYY-MM-DD
 
+      const targetCal = {
+        year: dayDate.getFullYear(),
+        month: dayDate.getMonth(),
+        date: dayDate.getDate()
+      };
+
       const resolveBranchId = (bStr: string) => {
         if (!bStr) return bStr;
         const bUpper = bStr.trim().toUpperCase();
@@ -253,10 +377,9 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
 
       // 1. Filter Orders
       const dayOrders = pesananList.filter(p => {
-        const pDate = parseDateRobust(p.TANGGAL_WAKTU || p.TANGGAL || p.tanggal || p[3] || p[1]);
-        if (!pDate) return false;
-        const pDayStr = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}-${String(pDate.getDate()).padStart(2, '0')}`;
-        if (pDayStr !== dayStr) return false;
+        const cal = getCalendarDate(p.TANGGAL_WAKTU || p.TANGGAL || p.tanggal || p[3] || p[1]);
+        if (!cal) return false;
+        if (cal.year !== targetCal.year || cal.month !== targetCal.month || cal.date !== targetCal.date) return false;
         const pBranch = resolveBranchId(String(p.ID_CABANG || p.idCabang || p.CABANG || p[2] || ''));
         if (selectedBranch !== 'ALL' && pBranch !== selectedBranch) return false;
         return true;
@@ -271,10 +394,9 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
 
       // 2. Filter Izin Shift
       const dayShifts = shiftList.filter(s => {
-        const sDate = parseDateRobust(s.TANGGAL || s.tanggal);
-        if (!sDate) return false;
-        const sDayStr = `${sDate.getFullYear()}-${String(sDate.getMonth() + 1).padStart(2, '0')}-${String(sDate.getDate()).padStart(2, '0')}`;
-        if (sDayStr !== dayStr) return false;
+        const cal = getCalendarDate(s.TANGGAL || s.tanggal);
+        if (!cal) return false;
+        if (cal.year !== targetCal.year || cal.month !== targetCal.month || cal.date !== targetCal.date) return false;
         const sBranch = resolveBranchId(String(s.CABANG || s.cabang || s.ID_CABANG || ''));
         if (selectedBranch !== 'ALL' && sBranch !== selectedBranch) return false;
         
@@ -289,17 +411,29 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
 
       // 3. Filter Buku Kas
       const dayKas = kasList.filter(k => {
-        const kDate = parseDateRobust(k.tanggal || k.TANGGAL || k[0]);
-        if (!kDate) return false;
-        const kDayStr = `${kDate.getFullYear()}-${String(kDate.getMonth() + 1).padStart(2, '0')}-${String(kDate.getDate()).padStart(2, '0')}`;
-        if (kDayStr !== dayStr) return false;
-        const kBranch = resolveBranchId(String(k.cabang || k.CABANG || k.ID_CABANG || k[1] || ''));
+        const cal = getCalendarDate(k.TANGGAL || k.Tanggal || k.tanggal || k[0]);
+        if (!cal) return false;
+        if (cal.year !== targetCal.year || cal.month !== targetCal.month || cal.date !== targetCal.date) return false;
+        const rawCab = k.CABANG || k.Cabang || k.cabang || k.ID_CABANG || (Array.isArray(k) ? k[2] : '');
+        const kBranch = resolveBranchId(String(rawCab || ''));
         if (selectedBranch !== 'ALL' && kBranch !== selectedBranch) return false;
         return true;
       });
 
-      const cashIn = dayKas.reduce((sum, k) => sum + Number(k.debit || k.DEBIT || k.Pemasukan || k[4] || 0), 0);
-      const cashOut = dayKas.reduce((sum, k) => sum + Number(k.kredit || k.KREDIT || k.Pengeluaran || k[5] || 0), 0);
+      let cashIn = 0;
+      let cashOut = 0;
+
+      dayKas.forEach(k => {
+        const kat = getTransaksiKategori(k).toLowerCase();
+        const debit = getTransaksiDebit(k);
+        const kredit = getTransaksiKredit(k);
+
+        if (kat === 'pendapatan usaha' || kat.includes('pendapatan usaha')) {
+          cashIn += debit;
+        } else if (kredit !== 0) {
+          cashOut += kredit;
+        }
+      });
 
       const isOpen = totalSalesCount > 0; // Buka/tutup hanya didasari pesanan
 
@@ -334,10 +468,18 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
         });
         
         dayKas.forEach(k => {
-          const b = resolveBranchId(String(k.cabang || k.CABANG || k.ID_CABANG || k[1] || ''));
+          const rawCab = k.CABANG || k.Cabang || k.cabang || k.ID_CABANG || (Array.isArray(k) ? k[2] : '');
+          const b = resolveBranchId(String(rawCab || ''));
           if (branchBreakdown[b]) {
-            branchBreakdown[b].cashIn += Number(k.debit || k.DEBIT || k.Pemasukan || k[4] || 0);
-            branchBreakdown[b].cashOut += Number(k.kredit || k.KREDIT || k.Pengeluaran || k[5] || 0);
+            const kat = getTransaksiKategori(k).toLowerCase();
+            const debit = getTransaksiDebit(k);
+            const kredit = getTransaksiKredit(k);
+
+            if (kat === 'pendapatan usaha' || kat.includes('pendapatan usaha')) {
+              branchBreakdown[b].cashIn += debit;
+            } else if (kredit !== 0) {
+              branchBreakdown[b].cashOut += kredit;
+            }
           }
         });
       }
@@ -758,7 +900,11 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                                   )}
                                 </h4>
                                 <p className="text-[10px] sm:text-xs text-zinc-500 font-medium mt-1">
-                                  {day.isOpen ? `Pemasukan: Rp ${day.cashIn.toLocaleString('id-ID')}` : 'Tidak ada catatan'}
+                                  {day.isOpen ? (
+                                    `Terdapat ${day.ordersCount} pesanan tercatat`
+                                  ) : (
+                                    "Tidak ada pesanan tercatat"
+                                  )}
                                 </p>
                               </div>
                             </div>
@@ -782,15 +928,9 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                                           <Building2 className="h-4 w-4 text-sky-600" />
                                           <h5 className="text-[11px] font-black text-zinc-900 uppercase tracking-widest">{cabang.NAMA_CABANG}</h5>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-3">
-                                          <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-3">
-                                            <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Pemasukan</p>
-                                            <p className="text-xs sm:text-sm font-black text-emerald-700">Rp {bd.cashIn.toLocaleString('id-ID')}</p>
-                                          </div>
-                                          <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-3">
-                                            <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Pengeluaran</p>
-                                            <p className="text-xs sm:text-sm font-black text-rose-700">Rp {bd.cashOut.toLocaleString('id-ID')}</p>
-                                          </div>
+                                        <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-3">
+                                          <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Total Pesanan</p>
+                                          <p className="text-xs sm:text-sm font-black text-zinc-800">{bd.orders} Pesanan</p>
                                         </div>
                                         {bd.shifts.length > 0 ? (
                                           <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
@@ -807,7 +947,7 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                                               <CheckCircle2 className="h-3 w-3" /> Sisanya hadir
                                             </p>
                                           </div>
-                                        ) : (bd.cashIn > 0 || bd.cashOut > 0 || bd.orders > 0) ? (
+                                        ) : (bd.orders > 0) ? (
                                           <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center gap-2">
                                             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                                             <p className="text-[10px] sm:text-xs text-emerald-800 font-bold">Semua staff hadir</p>
@@ -825,15 +965,9 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                               ) : (
                                 // SINGLE BRANCH VIEW
                                 <div className="space-y-3 pt-3">
-                                  <div className="grid grid-cols-2 gap-3">
-                                    <div className="bg-white border border-zinc-200/80 rounded-xl p-3 shadow-sm">
-                                      <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Pemasukan</p>
-                                      <p className="text-xs sm:text-sm font-black text-emerald-700">Rp {day.cashIn.toLocaleString('id-ID')}</p>
-                                    </div>
-                                    <div className="bg-white border border-zinc-200/80 rounded-xl p-3 shadow-sm">
-                                      <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Pengeluaran</p>
-                                      <p className="text-xs sm:text-sm font-black text-rose-700">Rp {day.cashOut.toLocaleString('id-ID')}</p>
-                                    </div>
+                                  <div className="bg-white border border-zinc-200/80 rounded-xl p-3 shadow-sm">
+                                    <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Pesanan Tercatat</p>
+                                    <p className="text-xs sm:text-sm font-black text-zinc-800">{day.ordersCount} Pesanan</p>
                                   </div>
                                   <div className="bg-white border border-zinc-200/80 rounded-xl p-4 shadow-sm">
                                     <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5"><UserCheck className="h-4 w-4" /> Catatan Kehadiran</p>
@@ -849,7 +983,7 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                                           <CheckCircle2 className="h-3 w-3" /> Sisanya hadir
                                         </li>
                                       </ul>
-                                    ) : (day.cashIn > 0 || day.cashOut > 0 || day.ordersCount > 0) ? (
+                                    ) : (day.ordersCount > 0) ? (
                                       <p className="text-[10px] sm:text-xs text-emerald-700 font-bold flex items-center gap-2">
                                         <CheckCircle2 className="h-4 w-4" /> Semua staff terjadwal hadir.
                                       </p>
@@ -890,14 +1024,6 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
                     <div className="flex items-center justify-between border-b border-zinc-50 pb-2">
                       <span className="text-[10px] text-zinc-400 font-bold uppercase">Total Transaksi</span>
                       <span className="text-[10px] font-black text-zinc-900">{metrics.totalOrders}</span>
-                    </div>
-                    <div className="flex items-center justify-between border-b border-zinc-50 pb-2">
-                      <span className="text-[10px] text-zinc-400 font-bold uppercase">Pemasukan</span>
-                      <span className="text-[10px] font-black text-emerald-700">Rp {metrics.totalCashIn.toLocaleString('id-ID')}</span>
-                    </div>
-                    <div className="flex items-center justify-between border-b border-zinc-50 pb-2">
-                      <span className="text-[10px] text-zinc-400 font-bold uppercase">Pengeluaran</span>
-                      <span className="text-[10px] font-black text-rose-700">Rp {metrics.totalCashOut.toLocaleString('id-ID')}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] text-zinc-400 font-bold uppercase">Total Izin</span>

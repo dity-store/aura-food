@@ -11,6 +11,7 @@ import RekapOperasionalPanel from './components/RekapOperasionalPanel';
 import { Transaction, Cabang } from './types';
 import { getTransactions, seedMasterDataIfEmpty, getMasterData, processSyncQueue, syncMasterDataFromGAS, saveMasterData } from './utils/db';
 import { printReceipt } from './utils/pdf';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Settings,
   FileText,
@@ -923,12 +924,33 @@ export default function App() {
                      setPosInitialCreateMode(true);
                      setActiveTab('pos');
                    }}
-                   onSelectTransaction={(tx) => {
+                   onSuccessPrint={async (tx) => {
+                     if (!tx) return;
+                     try {
+                       setPrintingStatus('printing');
+                       const { markTransactionAsPrinted } = await import('./utils/db');
+                       markTransactionAsPrinted(tx.id);
+                       await printReceipt(tx, activeBranch);
+                       setPrintingStatus('success');
+                       setTimeout(() => setPrintingStatus('idle'), 3000);
+                       alert('Struk Berhasil Dicetak & Disimpan');
+                     } catch (err) {
+                       console.error(err);
+                       setPrintingStatus('idle');
+                       alert('Gagal mencetak struk. Periksa koneksi printer Anda.');
+                     }
+                   }}
+                   onSelectTransaction={async (tx) => {
+                     if (!tx) return;
                      setSelectedTx(tx);
-                     setActiveTab(activeBranch === 'ADMIN' ? 'dashboard' : 'pos');
-                     setTimeout(() => {
-                       document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' });
-                     }, 100);
+                     if (activeBranch !== 'ADMIN') {
+                       setActiveTab('pos');
+                     } else {
+                       setActiveTab('dashboard');
+                       setTimeout(() => {
+                         document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth' });
+                       }, 100);
+                     }
                    }}
                  />
               </div>
@@ -949,108 +971,124 @@ export default function App() {
             {activeTab === 'admin' && (
               <div className={isAdminModuleActive ? "flex-grow flex flex-col bg-neutral-50" : "space-y-6 animate-fade-in"}>
                 <AdminPanel onRefreshPOSCatalog={handleReloadData} onModuleActiveChange={setIsAdminModuleActive} onOpenRekapOperasional={() => setActiveTab('rekap_operasional')} />
-                
-                {!isAdminModuleActive && (
-                  <div className="bg-red-50 border border-red-100 p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-left">
-                    <div>
-                      <h4 className="text-xs font-bold text-red-900 uppercase tracking-widest">Status Koneksi Database</h4>
-                    </div>
-                    <button
-                      onClick={disconnectGoogleSheet}
-                      className="bg-red-800 hover:bg-red-900 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer shrink-0 active:scale-95 shadow-sm"
-                    >
-                      Putuskan Hubungan Database
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
             {/* GLOBAL RECEIPT PREVIEW (Persistent across tabs) */}
-            {!isFullScreenTab && selectedTx && (
-              <div id="thermal-section" className="border-t border-zinc-200 pt-10 mt-12 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex flex-col items-center gap-2">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-50 text-red-800 rounded-full text-[10px] font-black uppercase tracking-widest border border-red-100">
-                    <ReceiptText className="h-3 w-3" /> {activeBranch === 'ADMIN' ? 'Detail Transaksi' : 'Pratinjau Struk'}
-                  </div>
-                  <button 
-                    onClick={() => setSelectedTx(null)}
-                    className="text-[10px] text-zinc-400 hover:text-red-700 font-bold flex items-center gap-1 transition cursor-pointer"
-                  >
-                    Tutup Pratinjau <X className="h-3 w-3" />
-                  </button>
-                </div>
-                
-                <div className="relative">
-                  {activeBranch === 'ADMIN' ? (
-                    <div className="max-w-[400px] mx-auto bg-white border border-zinc-200 p-6 rounded-2xl shadow-sm text-left pb-20">
-                      <div className="flex justify-between items-start mb-6 border-b border-zinc-100 pb-4">
-                        <div>
-                          <p className="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest">ID Pesanan</p>
-                          <p className="text-sm font-black text-zinc-900 mt-1">{selectedTx.id}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{selectedTx.paymentMethod || (selectedTx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}</p>
-                        </div>
-                      </div>
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-zinc-500 font-medium whitespace-nowrap">Tanggal & Waktu</span>
-                          <span className="text-zinc-900 font-bold text-right">{new Date(selectedTx.timestamp).toLocaleString('id-ID')}</span>
-                        </div>
-                        <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
-                          <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>
-                          <div className="space-y-3 relative before:absolute before:inset-y-0 before:left-[-1px] before:w-[3px] before:bg-zinc-100 before:rounded-full ml-1 pl-3">
-                            {selectedTx.detail?.map((item, idx) => (
-                              <div key={idx} className="flex justify-between items-start text-sm pb-3 last:pb-0">
-                                <div className="text-left font-medium text-zinc-800">
-                                  <span className="font-bold text-zinc-900">{item.QTY}x</span> {item.NAMA_MENU} 
-                                  {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
-                                </div>
-                                <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
-                                  Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="pt-4 border-t border-zinc-900/10">
-                          <div className="flex justify-between items-center text-base sm:text-lg">
-                            <span className="font-black text-zinc-900">Total Akhir</span>
-                            <span className="font-black text-emerald-600">Rp{selectedTx.totalAmount.toLocaleString('id-ID')}</span>
-                          </div>
-                        </div>
-                      </div>
+            <AnimatePresence>
+              {!isFullScreenTab && selectedTx && (
+                <motion.div 
+                  key="global-receipt-preview"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.5, ease: "easeInOut" }}
+                  style={{ overflow: "hidden" }}
+                  id="thermal-section" 
+                  className="border-t border-zinc-200 pt-10 mt-12 space-y-6"
+                >
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-50 text-red-800 rounded-full text-[10px] font-black uppercase tracking-widest border border-red-100">
+                      <ReceiptText className="h-3 w-3" /> {activeBranch === 'ADMIN' ? 'Detail Transaksi' : 'Pratinjau Struk'}
                     </div>
-                  ) : (
-                    <>
-                      <ReceiptThermal 
-                        transaction={selectedTx} 
-                        branchName={activeBranchName} 
-                        branchLocation={cabangList.find(c => String(c.ID_CABANG) === String(selectedTx.cabang))?.LOKASI}
-                      />
-                      <div className="max-w-[340px] mx-auto pt-6 pb-20">
-                         <button 
-                           onClick={async () => {
-                             if (!selectedTx) return;
-                             setPrintingStatus('printing');
-                             await printReceipt(selectedTx, activeBranch);
-                             setPrintingStatus('success');
-                             setTimeout(() => setPrintingStatus('idle'), 3000);
-                           }}
-                           className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-4 rounded-2xl transition flex items-center justify-center shadow-lg active:scale-95 uppercase tracking-widest cursor-pointer gap-3"
-                         >
-                           <Printer className="h-4 w-4" /> Cetak Struk Sekarang
-                         </button>
-                         <p className="text-center text-[9px] text-zinc-400 font-medium mt-4 uppercase tracking-widest">
-                            Pastikan Printer Thermal Menyala & Terhubung
-                         </p>
+                    <button 
+                      onClick={() => setSelectedTx(null)}
+                      className="text-[10px] text-zinc-400 hover:text-red-700 font-bold flex items-center gap-1 transition cursor-pointer"
+                    >
+                      Tutup Pratinjau <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  
+                  <div className="relative">
+                    {activeBranch === 'ADMIN' ? (
+                      <div className="max-w-[400px] mx-auto bg-white border border-zinc-200 p-6 rounded-2xl shadow-sm text-left pb-20">
+                        <div className="flex justify-between items-start mb-6 border-b border-zinc-100 pb-4">
+                          <div>
+                            <p className="text-[10px] text-zinc-400 font-extrabold uppercase tracking-widest">ID Pesanan</p>
+                            <p className="text-sm font-black text-zinc-900 mt-1">{selectedTx.id}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-bold uppercase tracking-widest inline-block">{selectedTx.paymentMethod || (selectedTx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}</p>
+                          </div>
+                        </div>
+                        <div className="space-y-4">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-zinc-500 font-medium whitespace-nowrap">Tanggal & Waktu</span>
+                            <span className="text-zinc-900 font-bold text-right">{new Date(selectedTx.timestamp).toLocaleString('id-ID')}</span>
+                          </div>
+                          <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
+                            <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>
+                            <div className="space-y-3 relative before:absolute before:inset-y-0 before:left-[-1px] before:w-[3px] before:bg-zinc-100 before:rounded-full ml-1 pl-3">
+                              {selectedTx.detail?.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                                  <div className="text-left font-medium text-zinc-800">
+                                    <span className="font-bold text-zinc-900">{item.QTY}x</span> {item.NAMA_MENU} 
+                                    {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
+                                  </div>
+                                  <div className="text-right font-medium text-zinc-700 whitespace-nowrap">
+                                    Rp{((item.HARGA_SATUAN || item.HARGA || 0) * item.QTY).toLocaleString('id-ID')}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="pt-4 border-t border-zinc-900/10">
+                            <div className="flex justify-between items-center text-base sm:text-lg">
+                              <span className="font-black text-zinc-900">Total Akhir</span>
+                              <span className="font-black text-emerald-600">Rp{selectedTx.totalAmount.toLocaleString('id-ID')}</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
+                    ) : (
+                      <>
+                        <ReceiptThermal 
+                          transaction={selectedTx} 
+                          branchName={activeBranchName} 
+                          branchLocation={cabangList.find(c => String(c.ID_CABANG) === String(selectedTx.cabang))?.LOKASI}
+                        />
+                        <div className="max-w-[340px] mx-auto pt-6 pb-20">
+                           <button 
+                             disabled={printingStatus === 'printing'}
+                             onClick={async () => {
+                               if (!selectedTx) return;
+                               setPrintingStatus('printing');
+                               await printReceipt(selectedTx, activeBranch);
+                               setPrintingStatus('success');
+                               setTimeout(() => setPrintingStatus('idle'), 3000);
+                             }}
+                             className={`w-full text-white font-extrabold text-xs py-4 rounded-2xl transition flex items-center justify-center shadow-lg active:scale-95 uppercase tracking-widest cursor-pointer gap-3 ${
+                               printingStatus === 'printing' 
+                                 ? 'bg-amber-500 animate-pulse' 
+                                 : printingStatus === 'success'
+                                 ? 'bg-emerald-600'
+                                 : 'bg-red-700 hover:bg-red-800'
+                             }`}
+                           >
+                             {printingStatus === 'printing' ? (
+                               <>
+                                 <RefreshCw className="h-4 w-4 animate-spin" /> Sedang Mencetak...
+                               </>
+                             ) : printingStatus === 'success' ? (
+                               <>
+                                 <CheckCircle2 className="h-4 w-4" /> Berhasil Dicetak
+                               </>
+                             ) : (
+                               <>
+                                 <Printer className="h-4 w-4" /> Cetak Struk Sekarang
+                               </>
+                             )}
+                           </button>
+                           <p className="text-center text-[9px] text-zinc-400 font-medium mt-4 uppercase tracking-widest">
+                              Pastikan Printer Thermal Menyala & Terhubung
+                           </p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </main>
 
           {!isFullScreenTab && activeBranch === 'ADMIN' && (
