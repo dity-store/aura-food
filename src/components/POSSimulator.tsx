@@ -1,7 +1,8 @@
+import { formatToIDDate, getWITAString } from "../utils/date";
 import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import { createPortal } from 'react-dom';
-import { createRoot } from 'react-dom/client';
+import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import { MasterData, Varian, Menu, CartItem, Transaction, SyncQueueItem } from '../types';
 import ReceiptThermal from './ReceiptThermal';
 import { 
@@ -18,7 +19,8 @@ import {
   getTransactionsFromGAS,
   clearSyncedTransactions,
   markTransactionAsPrinted,
-  getPrintedTransactionIds
+  getPrintedTransactionIds,
+  syncMasterDataFromGAS
 } from '../utils/db';
 import { printReceipt, generateAndUploadReceipt } from '../utils/pdf';
 import { connectThermalPrinter, printThermalReceipt } from '../utils/printer';
@@ -37,15 +39,19 @@ import {
   Minus,
   Filter,
   Trash2,
+  Pencil,
   ArrowRight,
   ArrowLeft,
   Check,
   Menu as MenuIcon,
   X,
+  ChevronDown,
+  ChevronUp,
   CreditCard,
   Banknote,
   Wallet,
   UtensilsCrossed,
+  Info,
   AlertCircle,
   ListOrdered,
   ReceiptText,
@@ -60,8 +66,7 @@ import {
   Gift,
   QrCode,
   ShoppingBag,
-  Coins,
-  ChevronDown
+  Coins
 } from 'lucide-react';
 
 interface POSSimulatorProps {
@@ -76,7 +81,7 @@ interface POSSimulatorProps {
   initialCreateMode?: boolean;
 }
 
-let posInitialFetchDone = new Set<string>();
+let posInitialFetchDone = new Map<string, string>(); // branch -> last_fetched_date (YYYY-MM-DD)
 
 export default function POSSimulator({ 
   onSelectTransaction, 
@@ -97,10 +102,18 @@ export default function POSSimulator({
     if (!navigator.onLine) return;
     setIsSyncing(true);
     try {
+      await syncMasterDataFromGAS(); // Sync master data (menus, promos, etc)
       await processSyncQueue();
-      await loadDataFromDB();
+      await loadDataFromDB(false, true); // SILENT REFRESH
+      confetti({
+        particleCount: 40,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#ef4444', '#dc2626', '#b91d1d']
+      });
     } catch (err) {
       console.error("Sync error:", err);
+      triggerAlert("Gagal sinkronisasi data", "error");
     } finally {
       setIsSyncing(false);
     }
@@ -114,14 +127,19 @@ export default function POSSimulator({
     if (activeBranchObj && activeBranchObj.NAMA_CABANG) {
       return activeBranchObj.NAMA_CABANG;
     }
-    if (propActiveBranchName && propActiveBranchName !== activeBranch && propActiveBranchName !== 'ADMIN' && isNaN(Number(propActiveBranchName))) {
+    if (propActiveBranchName && isNaN(Number(propActiveBranchName)) && propActiveBranchName !== 'ADMIN') {
         return propActiveBranchName;
     }
     if (activeBranch === 'ADMIN') return 'ADMIN';
+    if (activeBranch === '1') return 'PRAYA';
     if (!activeBranch) return 'MATARAM';
-    return (propActiveBranchName && isNaN(Number(propActiveBranchName))) ? propActiveBranchName : 'Cabang';
+    return (propActiveBranchName && isNaN(Number(propActiveBranchName))) ? propActiveBranchName : activeBranch;
   }, [activeBranchObj, activeBranch, propActiveBranchName]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [additionalCharges, setAdditionalCharges] = useState<{id: string, name: string, price: number, qty: number}[]>([]);
+  const [editingChargeId, setEditingChargeId] = useState<string | null>(null);
+  const [isAddingCharge, setIsAddingCharge] = useState<boolean>(false);
+  const [newCharge, setNewCharge] = useState<{name: string, price: number, qty: number}>({ name: '', price: 0, qty: 1 });
   const [category, setCategory] = useState<string>('Semua');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -143,6 +161,13 @@ export default function POSSimulator({
   const [showCheckoutModal, setShowCheckoutModal] = useState<boolean>(false);
   const [showPrinterWarning, setShowPrinterWarning] = useState<boolean>(false);
   const [addedItemMessage, setAddedItemMessage] = useState<string | null>(null);
+  const [showPromoTooltip, setShowPromoTooltip] = useState<string | null>(null);
+
+  const toggleCompliment = (id_detail: string) => {
+    setCart(prev => prev.map(item => 
+      item.id_detail === id_detail ? { ...item, isCompliment: !item.isCompliment } : item
+    ));
+  };
 
   // Custom Modals
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -153,6 +178,41 @@ export default function POSSimulator({
   const triggerAlert = (msg: string, type: 'success' | 'error' | 'warning' = 'warning') => {
     setAlertType(type);
     setAlertMessage(msg);
+  };
+
+  const handleSaveCharge = () => {
+    if (!newCharge.name || newCharge.price < 0) return;
+    
+    if (editingChargeId) {
+      setAdditionalCharges(prev => prev.map(c => 
+        c.id === editingChargeId ? { ...c, ...newCharge } : c
+      ));
+      setEditingChargeId(null);
+    } else {
+      setAdditionalCharges(prev => [
+        ...prev, 
+        { ...newCharge, id: `charge-${Date.now()}` }
+      ]);
+      setIsAddingCharge(false);
+    }
+    setNewCharge({ name: '', price: 0, qty: 1 });
+  };
+
+  const handleEditCharge = (id: string) => {
+    const charge = additionalCharges.find(c => c.id === id);
+    if (charge) {
+      setNewCharge({ name: charge.name, price: charge.price, qty: charge.qty });
+      setEditingChargeId(id);
+      setIsAddingCharge(false); 
+    }
+  };
+
+  const handleDeleteCharge = (id: string) => {
+    setAdditionalCharges(prev => prev.filter(c => c.id !== id));
+    if (editingChargeId === id) {
+      setEditingChargeId(null);
+      setNewCharge({ name: '', price: 0, qty: 1 });
+    }
   };
 
   // Default payment
@@ -175,6 +235,108 @@ export default function POSSimulator({
   
   // Pull to refresh
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+    const isPromoInPeriod = (periode: string | undefined): boolean => {
+    if (!periode) return true;
+    try {
+      const parts = periode.split(' - ');
+      const startStr = parts[0];
+      const endStr = parts.length > 1 ? parts[1] : startStr;
+      
+      const parseDate = (dStr: string, isEnd: boolean = false) => {
+        if (!dStr) return new Date(NaN);
+        const s = dStr.trim();
+        let dateStr = '';
+        if (s.match(/^\d{1,2}\/\d{1,2}\/\d{4}/)) {
+           const p = s.split(' ');
+           const dParts = p[0].split('/');
+           const time = p[1] || (isEnd ? '23:59:59' : '00:00:00');
+           dateStr = `${dParts[2]}-${dParts[1]}-${dParts[0]}T${time}+08:00`;
+        }
+        else if (s.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)) {
+           dateStr = `${s.replace(' ', 'T')}:00+08:00`;
+        }
+        else if (s.match(/^\d{4}-\d{2}-\d{2}$/)) {
+           dateStr = `${s}T${isEnd ? '23:59:59' : '00:00:00'}+08:00`;
+        } else {
+           dateStr = s.replace(' ', 'T');
+        }
+        return new Date(dateStr);
+      };
+      
+      const start = parseDate(startStr, false);
+      const end = parseDate(endStr, true);
+      
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+         return false;
+      }
+      
+      const now = new Date();
+      if (now < start || now > end) return false;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+const getActivePromoForVariant = (variantId: string, qty: number = 1, ignoreQtyCheck: boolean = false, includePerPesanan: boolean = false) => {
+    if (!masterData?.promo) return null;
+    const now = new Date();
+    const branchId = activeBranch || '';
+
+    // Filter promos that are active for this variant and branch
+    const eligiblePromos = masterData.promo.filter(p => {
+      // 1. Check if JENIS_PROMO is PER_MENU (default to PER_MENU if empty)
+      const jenis = (p.JENIS_PROMO || 'PER_MENU').toUpperCase();
+      if (!includePerPesanan && jenis === 'PER_PESANAN') return false;
+      if (includePerPesanan && jenis !== 'PER_PESANAN' && !variantId) return false; // For total checkout promo check
+      if (!includePerPesanan && jenis !== 'PER_MENU') return false; 
+
+      // 2. Check if variant is in TARGET_ITEM
+      const targets = p.TARGET_ITEM ? String(p.TARGET_ITEM).split('|').filter(Boolean).map(s => s.trim()) : [];
+      
+      const variant = masterData?.varian.find(v => v.ID_VARIAN === variantId);
+      const menuId = variant?.ID_MENU || '';
+      const menu = masterData?.menu.find(m => m.ID_MENU === menuId);
+      const categoryId = menu?.ID_KATEGORI || '';
+      
+      if (targets.length > 0 && !targets.includes(String(variantId)) && !targets.includes(String(menuId)) && !targets.includes(String(categoryId))) return false;
+
+      // 3. Check if branch is eligible
+      if (p.ID_CABANG && String(p.ID_CABANG).toUpperCase() !== 'ALL') {
+        const branchTargets = String(p.ID_CABANG).split('|').filter(Boolean).map(s => s.trim());
+        if (!branchTargets.includes(branchId)) return false;
+      }
+
+      // 4. Check if Qty satisfies (if not ignored)
+      if (!ignoreQtyCheck && qty < (p.SYARAT_QTY || 0)) return false;
+
+      // 5. Check Periode - Robust comparison
+      if (!isPromoInPeriod(p.PERIODE)) return false;
+
+      return true;
+    });
+
+    if (eligiblePromos.length === 0) return null;
+
+    // Return the "best" promo (highest discount) - simple logic for now: just take the first
+    return eligiblePromos[0];
+  };
+
+  const calculateDiscountedPrice = (originalPrice: number, promo: any, _qty: number = 1) => {
+    if (!promo) return originalPrice;
+    if (promo.TIPE === 'DISKON_PERSEN') {
+      return originalPrice * (1 - (promo.NILAI_PROMO / 100));
+    }
+    if (promo.TIPE === 'DISKON_NOMINAL') {
+      // Nominal discount per item usually
+      return Math.max(0, originalPrice - (promo.NILAI_PROMO || 0));
+    }
+    if (promo.TIPE === 'HARGA_FIX') {
+      // Fix price per item
+      return promo.NILAI_PROMO || originalPrice;
+    }
+    return originalPrice;
+  };
   const [startY, setStartY] = useState<number | null>(null);
 
   const [showReportPopup, setShowReportPopup] = useState<boolean>(false);
@@ -325,10 +487,19 @@ export default function POSSimulator({
     }
   }, [isCreatingTx, onCreatingStatusChange, onSelectTransaction]);
 
-  const loadDataFromDB = async (forceRemote: boolean = false) => {
-    setIsInitialLoading(true);
+  const loadDataFromDB = async (forceRemote: boolean = false, isSilent: boolean = false) => {
+    if (!isSilent) setIsInitialLoading(true);
     try {
-      const dbMaster = await seedMasterDataIfEmpty();
+      // Sync master data from GAS if online to ensure latest promos/menus
+      if (navigator.onLine && !isSilent) {
+        try {
+          await syncMasterDataFromGAS();
+        } catch (e) {
+          console.warn("Initial master data sync failed, using local cache:", e);
+        }
+      }
+      
+      const dbMaster = await getMasterData();
       setMasterData(dbMaster);
 
       let allHistory = await getTransactions();
@@ -370,19 +541,26 @@ export default function POSSimulator({
       const dbQueue = await getSyncQueue();
       const branchQueue = activeBranch === 'ADMIN' ? dbQueue : dbQueue.filter(item => String(item.payload?.cabang) === String(activeBranch));
       setPendingQueue(branchQueue);
-      setIsInitialLoading(false);
     } catch (err) {
       console.error("IndexedDB error:", err);
-      setIsInitialLoading(false);
+    } finally {
+      if (!isSilent) setIsInitialLoading(false);
     }
   };
 
   useEffect(() => {
-    const shouldFetchRemote = !!activeBranch && activeBranch !== 'ADMIN' && !posInitialFetchDone.has(activeBranch);
+    // 1. Initial or branch-change load logic
+    const today = new Date().toISOString().split('T')[0];
+    const lastFetched = posInitialFetchDone.get(activeBranch);
+    const shouldFetchRemote = !!activeBranch && activeBranch !== 'ADMIN' && lastFetched !== today;
+    
     if (shouldFetchRemote) {
-        posInitialFetchDone.add(activeBranch);
+        posInitialFetchDone.set(activeBranch, today);
     }
+    
     loadDataFromDB(shouldFetchRemote);
+
+    // 2. Connectivity listeners
     const handleOnline = () => {
       setIsOnline(true);
       triggerSync();
@@ -390,15 +568,12 @@ export default function POSSimulator({
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
-
-  useEffect(() => {
-    loadDataFromDB();
-  }, [refreshTrigger, activeBranch]);
+  }, [activeBranch, refreshTrigger]); // Combined dependencies to prevent double calls
 
   useEffect(() => {
     if (addedItemMessage) {
@@ -488,18 +663,65 @@ export default function POSSimulator({
       return;
     }
 
+    const promo = getActivePromoForVariant(item.varian.ID_VARIAN, 1);
+    const discountedPrice = calculateDiscountedPrice(item.varian.HARGA, promo, 1);
+    const promoId = promo ? promo.ID_PROMO : undefined;
+
     setCart(prev => {
       const existingIndex = prev.findIndex(i => i.varian.ID_VARIAN === item.varian.ID_VARIAN);
       if (existingIndex > -1) {
         const nextCart = [...prev];
-        nextCart[existingIndex].quantity += 1;
+        const nextQty = nextCart[existingIndex].quantity + 1;
+        nextCart[existingIndex].quantity = nextQty;
+        
+        // Recalculate promo for new qty
+        const newPromo = getActivePromoForVariant(item.varian.ID_VARIAN, nextQty);
+        nextCart[existingIndex].discountedPrice = calculateDiscountedPrice(item.varian.HARGA, newPromo, nextQty);
+        nextCart[existingIndex].promoId = newPromo ? newPromo.ID_PROMO : undefined;
+        
         return nextCart;
       }
-      return [...prev, { id_detail: `DET-${Date.now()}-${Math.floor(Math.random() * 9000)}`, menu: item.menu, varian: item.varian, quantity: 1 }];
+      return [...prev, { 
+        id_detail: `DET-${Date.now()}-${Math.floor(Math.random() * 9000)}`, 
+        menu: item.menu, 
+        varian: item.varian, 
+        quantity: 1,
+        discountedPrice: discountedPrice !== item.varian.HARGA ? discountedPrice : undefined,
+        promoId
+      }];
     });
     
     setAddedItemMessage(`${getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)} ditambahkan`);
     setTimeout(() => setAddedItemMessage(null), 1500);
+
+    // Combo Logic: Ayam Geprek -> Free Es Teh
+    if (item.menu.NAMA_MENU.toLowerCase().includes('geprek')) {
+       // Search for Es Teh in masterData
+       const esTehMenu = masterData?.menu?.find(m => m.NAMA_MENU.toLowerCase().includes('teh'));
+       const esTehVarian = masterData?.varian?.find(v => 
+          v.ID_MENU === esTehMenu?.ID_MENU && 
+          (v.NAMA_VARIAN.toLowerCase().includes('dingin') || v.NAMA_VARIAN.toLowerCase().includes('es'))
+       );
+       
+       if (esTehMenu && esTehVarian) {
+          setCart(prev => {
+             // Find if there's already a compliment Es Teh
+             const existingIdx = prev.findIndex(i => i.varian.ID_VARIAN === esTehVarian.ID_VARIAN && i.isCompliment);
+             if (existingIdx > -1) {
+                const nextCart = [...prev];
+                nextCart[existingIdx].quantity += 1;
+                return nextCart;
+             }
+             return [...prev, {
+                id_detail: `DET-COMBO-${Date.now()}-${Math.floor(Math.random()*1000)}`,
+                menu: esTehMenu,
+                varian: esTehVarian,
+                quantity: 1,
+                isCompliment: true
+             }];
+          });
+       }
+    }
   };
 
   const updateCartQty = (idVarian: string, delta: number) => {
@@ -514,7 +736,16 @@ export default function POSSimulator({
     setCart(prev => prev.map(i => {
       if (i.varian.ID_VARIAN === idVarian) {
         const newQty = Math.max(1, i.quantity + delta);
-        return { ...i, quantity: newQty };
+        // Recalculate promo
+        const newPromo = getActivePromoForVariant(i.varian.ID_VARIAN, newQty);
+        const newDiscountedPrice = calculateDiscountedPrice(i.varian.HARGA, newPromo, newQty);
+        
+        return { 
+          ...i, 
+          quantity: newQty,
+          discountedPrice: newDiscountedPrice !== i.varian.HARGA ? newDiscountedPrice : undefined,
+          promoId: newPromo ? newPromo.ID_PROMO : undefined
+        };
       }
       return i;
     }));
@@ -528,40 +759,48 @@ export default function POSSimulator({
     let effective = [...cart];
     if (masterData?.promo) {
        masterData.promo.forEach(p => {
-          const targets = p.TARGET_ITEM ? String(p.TARGET_ITEM).split('|').map(s => s.trim()) : [];
-          if (targets.length === 0) return;
+          // Only process PER_PESANAN here. PER_MENU is handled per-item in addToCart/updateCartQty.
+          if (p.JENIS_PROMO !== 'PER_PESANAN') return;
+          
+          if (!isPromoInPeriod(p.PERIODE)) return;
+          
+          const targets = p.TARGET_ITEM ? String(p.TARGET_ITEM).split('|').map(s => s.trim()).filter(Boolean) : [];
           
           let matchingQty = 0;
           let matchingTotalValue = 0;
           for (let item of cart) {
-             if (targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU))) {
+             if (targets.length === 0 || targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU)) || targets.includes(String(item.menu.ID_KATEGORI))) {
                 matchingQty += item.quantity;
-                matchingTotalValue += (item.varian.HARGA * item.quantity);
+                const basePrice = item.discountedPrice !== undefined ? item.discountedPrice : item.varian.HARGA;
+                matchingTotalValue += (basePrice * item.quantity);
              }
           }
 
-          if (matchingQty >= p.SYARAT_QTY && p.SYARAT_QTY > 0) {
-             const timesApplied = Math.floor(matchingQty / p.SYARAT_QTY);
+          if (matchingQty >= (p.SYARAT_QTY || 1)) {
+             const timesApplied = p.SYARAT_QTY > 0 ? Math.floor(matchingQty / p.SYARAT_QTY) : 1;
              let discountAmount = 0;
              let discountName = `[PROMO] ${p.NAMA_PROMO}`;
              
              if (p.TIPE === 'HARGA_FIX') {
-                let targetNormalPriceForSyarat = 0;
+                let targetCurrentPriceForSyarat = 0;
                 let qToCount = p.SYARAT_QTY * timesApplied;
                 
                 for (let item of cart) {
-                  if (targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU))) {
+                  if (targets.length === 0 || targets.includes(String(item.varian.ID_VARIAN)) || targets.includes(String(item.menu.ID_MENU)) || targets.includes(String(item.menu.ID_KATEGORI))) {
                      let takeQty = Math.min(item.quantity, qToCount);
-                     targetNormalPriceForSyarat += takeQty * item.varian.HARGA;
+                     const basePrice = item.discountedPrice !== undefined ? item.discountedPrice : item.varian.HARGA;
+                     targetCurrentPriceForSyarat += takeQty * basePrice;
                      qToCount -= takeQty;
                      if (qToCount <= 0) break;
                   }
                 }
                 
                 const promoFixedPrice = Number(p.NILAI_PROMO) * timesApplied;
-                discountAmount = targetNormalPriceForSyarat - promoFixedPrice;
+                discountAmount = Math.max(0, targetCurrentPriceForSyarat - promoFixedPrice);
              } else if (p.TIPE === 'DISKON_PERSEN') {
                 discountAmount = matchingTotalValue * (Number(p.NILAI_PROMO) / 100);
+             } else if (p.TIPE === 'DISKON_NOMINAL') {
+                discountAmount = Number(p.NILAI_PROMO) * timesApplied;
              }
 
              if (discountAmount > 0) {
@@ -591,7 +830,19 @@ export default function POSSimulator({
   };
 
   const effectiveCart = getEffectiveCart();
-  const checkoutTotal = effectiveCart.reduce((sum, item) => sum + (item.varian.HARGA * item.quantity), 0);
+  const checkoutTotal = effectiveCart.reduce((sum, item) => {
+    if (item.isCompliment) return sum;
+    const p = item.discountedPrice !== undefined ? item.discountedPrice : item.varian.HARGA;
+    return sum + (p * item.quantity);
+  }, 0);
+
+  const chargesTotal = additionalCharges.reduce((sum, c) => sum + (Number(c.price || 0) * Number(c.qty || 1)), 0);
+
+  const originalTotalBeforePromo = cart.reduce((sum, item) => {
+    return sum + (item.varian.HARGA * item.quantity);
+  }, 0);
+
+  const totalPromoDiscount = originalTotalBeforePromo - checkoutTotal;
 
   const printReceiptAndUpload = async (tx: Transaction) => {
     onPrintingStatus?.('printing');
@@ -697,30 +948,68 @@ export default function POSSimulator({
     // REVERTED ID FORMAT: Simpler format as requested
     const transactionId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const now = new Date();
+    
+    const addChargeAmount = chargesTotal;
+    const finalTotal = checkoutTotal + addChargeAmount;
+
+    // Format Catatan: Promo | Biaya Tambahan | Catatan
+    const currentEffectiveCart = getEffectiveCart();
+    const appliedPromos = currentEffectiveCart.filter(item => item.menu.ID_MENU === 'PROMO');
+    const promoNames = appliedPromos.map(p => {
+      const price = p.discountedPrice !== undefined ? p.discountedPrice : p.varian.HARGA;
+      const amount = Math.abs(price * p.quantity);
+      return `${p.menu.NAMA_MENU.replace('[PROMO] ', '')} (-Rp${amount.toLocaleString('id-ID')})`;
+    }).join(', ');
+    
+    const promoPart = promoNames || (appliedPromos.length > 0 ? "Promo/Potongan" : "");
+    
+    const chargePart = additionalCharges.map(c => {
+      const amount = c.price * c.qty;
+      return `${c.name} (Rp${amount.toLocaleString('id-ID')})`;
+    }).join(', ');
+    
+    const userNotePart = catatan.trim();
+
+    const finalCatatan = `${promoPart} | ${chargePart} | ${userNotePart}`;
+    const isActuallyEmpty = !promoPart && !chargePart && !userNotePart;
+    const storageCatatan = isActuallyEmpty ? "" : finalCatatan;
+
     const newTx: Transaction = {
       id: transactionId,
       pesanan: {
         ID_PESANAN: transactionId,
-        TANGGAL_WAKTU: now.toISOString(),
+        TANGGAL_WAKTU: getWITAString(now),
         ID_CABANG: activeBranch,
-        TOTAL_TAGIHAN: checkoutTotal,
+        TOTAL_TAGIHAN: finalTotal,
         METODE_BAYAR: isCompliment ? 'Compliment' : paymentMethod,
         JENIS_PESANAN: isCompliment ? 'Compliment' : 'Normal',
-        CATATAN: catatan
+        CATATAN: storageCatatan,
+        ADDITIONAL_CHARGES: additionalCharges,
+        PROMOS: appliedPromos
       },
-      detail: effectiveCart.map(c => ({
-        ID_DETAIL: c.id_detail,
-        ID_PESANAN: transactionId,
-        NAMA_MENU: c.menu.NAMA_MENU,
-        VARIAN: c.varian.NAMA_VARIAN,
-        HARGA_SATUAN: c.varian.HARGA,
-        QTY: c.quantity,
-        SUBTOTAL: c.varian.HARGA * c.quantity
-      })),
-      timestamp: now.toISOString(),
-      cabang: activeBranch,
-      totalAmount: checkoutTotal,
+      detail: cart.map(c => {
+        const price = c.isCompliment ? 0 : (c.discountedPrice !== undefined ? c.discountedPrice : c.varian.HARGA);
+        return {
+          ID_DETAIL: c.id_detail,
+          ID_PESANAN: transactionId,
+          NAMA_MENU: c.menu.NAMA_MENU,
+          VARIAN: c.varian.NAMA_VARIAN,
+          ID_MENU: c.menu.ID_MENU,
+          ID_VARIAN: c.varian.ID_VARIAN,
+          HARGA_SATUAN: price,
+          QTY: c.quantity,
+          SUBTOTAL: price * c.quantity,
+          PROMO_ID: c.promoId,
+          ORIGINAL_PRICE: c.varian.HARGA,
+          isCompliment: c.isCompliment
+        };
+      }),
+      timestamp: getWITAString(now),
+      cabang: derivedBranchName,
+      totalAmount: finalTotal,
       paymentMethod: isCompliment ? 'Compliment' : paymentMethod,
+      isCompliment: isCompliment,
+      isPrinting: false,
       status: 'pending_sync'
     };
 
@@ -757,8 +1046,9 @@ export default function POSSimulator({
       setShowCheckoutModal(false);
       setIsCreatingTx(false);
       
-      await loadDataFromDB();
-      onSelectTransaction(null); // Prevent global preview from popping up below
+      // Update local history manually to show new tx immediately without full reload
+      setHistory(prev => [newTx, ...prev]);
+      onSelectTransaction(newTx);
       
       setTimeout(() => {
          document.getElementById('thermal-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -767,7 +1057,7 @@ export default function POSSimulator({
          } else {
             generateAndUploadReceipt(newTx, activeBranch);
          }
-      }, 700);
+      }, 300);
 
     } catch (err) {
       console.error("Gagal memproses checkout", err);
@@ -805,17 +1095,44 @@ export default function POSSimulator({
   const totalPortions = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const katalog = React.useMemo(() => {
-    if (masterData?.katalogLengkap && masterData.katalogLengkap.length > 0) {
-      return masterData.katalogLengkap;
-    }
     if (!masterData) return [];
-    return masterData.kategori.map(k => ({
-      ...k,
-      menus: masterData.menu.filter(m => String(m.ID_KATEGORI).trim() === String(k.ID_KATEGORI).trim()).map(m => ({
+    
+    // Use categorical mapping
+    const kats = [...masterData.kategori];
+    
+    // Ensure all categories from menus are included even if not in masterData.kategori
+    masterData.menu.forEach(m => {
+      const mKat = String(m.ID_KATEGORI || m.KATEGORI || m.NAMA_KATEGORI || '').trim().toUpperCase();
+      if (!mKat) return;
+      const catExists = kats.some(k => 
+        String(k.ID_KATEGORI || '').trim().toUpperCase() === mKat || 
+        String(k.NAMA_KATEGORI || '').trim().toUpperCase() === mKat
+      );
+      if (!catExists) {
+        kats.push({
+          ID_KATEGORI: mKat,
+          NAMA_KATEGORI: m.KATEGORI || m.NAMA_KATEGORI || m.ID_KATEGORI || mKat
+        });
+      }
+    });
+
+    return kats.map(k => {
+      const kId = String(k.ID_KATEGORI || '').trim().toUpperCase();
+      const kName = String(k.NAMA_KATEGORI || '').trim().toUpperCase();
+      
+      const menusForCat = masterData.menu.filter(m => {
+        const mKat = String(m.ID_KATEGORI || m.KATEGORI || m.NAMA_KATEGORI || '').trim().toUpperCase();
+        return mKat === kId || mKat === kName;
+      }).map(m => ({
         ...m,
-        varians: masterData.varian.filter(v => String(v.ID_MENU).trim() === String(m.ID_MENU).trim())
-      }))
-    }));
+        varians: masterData.varian.filter(v => String(v.ID_MENU).trim().toUpperCase() === String(m.ID_MENU).trim().toUpperCase())
+      }));
+
+      return {
+        ...k,
+        menus: menusForCat
+      };
+    }).filter(k => k.menus.length > 0);
   }, [masterData]);
 
   const displayMenus = React.useMemo(() => {
@@ -880,8 +1197,34 @@ export default function POSSimulator({
           const m = p.menu as any;
           const varianList = m.varians || m.varian || m.Varian || [];
           const hasNoVariants = !varianList || varianList.length === 0;
-          const isMenuInactive = varianList && varianList.length > 0 && !varianList.some((v: any) => v.STATUS === 'AKTIF' || v.STATUS === 'Tersedia');
+          const activeVarians = varianList.filter((v: any) => {
+            const st = String(v.STATUS || '').trim().toUpperCase();
+            return st === 'AKTIF' || st === 'TERSEDIA' || st === 'TRUE' || st === '1' || st === ''; // Allow empty as active by default if data is messy
+          });
+          const isMenuInactive = varianList && varianList.length > 0 && activeVarians.length === 0;
           const isDisabled = hasNoVariants || isMenuInactive;
+          
+          // Check for any active promo on variants of this menu
+          let bestPromoLabel = '';
+          let hasPromo = false;
+          let minPrice = Infinity;
+          let minDiscountedPrice = Infinity;
+
+          if (!isDisabled) {
+            activeVarians.forEach((v: any) => {
+              // Exclude PER_PESANAN from catalog badges as requested - only show PER_MENU promos here
+              const promo = getActivePromoForVariant(v.ID_VARIAN, 1, true, false); 
+              const discPrice = promo && promo.JENIS_PROMO !== 'PER_PESANAN' ? calculateDiscountedPrice(v.HARGA, promo, 1) : v.HARGA;
+              if (promo) {
+                hasPromo = true;
+                if (!bestPromoLabel) bestPromoLabel = promo.NAMA_PROMO;
+              }
+              if (v.HARGA < minPrice) minPrice = v.HARGA;
+              if (discPrice < minDiscountedPrice) minDiscountedPrice = discPrice;
+            });
+          }
+
+          const itemCount = cart.filter(item => item.menu.ID_MENU === m.ID_MENU).reduce((sum, item) => sum + item.quantity, 0);
           
           return (
           <div
@@ -893,13 +1236,38 @@ export default function POSSimulator({
             className={`p-4 rounded-3xl transition flex flex-col justify-between select-none relative overflow-hidden text-left min-h-[140px]
               ${isDisabled ? 'bg-zinc-100 border border-zinc-200 opacity-60 grayscale cursor-not-allowed' : 'bg-white border border-zinc-200/85 hover:border-red-650/40 cursor-pointer shadow-sm hover:shadow-md group active:scale-95'}`}
           >
+            {itemCount > 0 && !isDisabled && (
+              <div className="absolute top-0 right-0">
+                <div className="bg-red-700 text-white text-[7px] font-black px-2 py-1 rounded-bl-xl uppercase tracking-tighter shadow-sm flex items-center gap-1">
+                  <Check className="h-2 w-2" />
+                  {itemCount}x Dipilih
+                </div>
+              </div>
+            )}
             <div>
               <div className="flex justify-between items-start mb-3">
                 <div className={`text-xl transition origin-left rounded-xl p-2.5 border ${isDisabled ? 'bg-zinc-200 border-zinc-300' : 'bg-zinc-50 border-zinc-100 group-hover:scale-110'}`}>
                   {getProductIcon(p.categoryName)}
                 </div>
+                {hasPromo && (
+                  <div className="bg-red-600 text-white text-[8px] font-black px-2 py-1 rounded-lg animate-pulse uppercase tracking-widest shadow-sm">
+                    {bestPromoLabel || 'PROMO'}
+                  </div>
+                )}
               </div>
               <h4 className={`text-sm font-bold leading-tight transition ${isDisabled ? 'text-zinc-600' : 'text-zinc-950 group-hover:text-red-800'}`}>{m.NAMA_MENU}</h4>
+              <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                {hasPromo && minDiscountedPrice < minPrice ? (
+                  <>
+                    <span className="text-xs font-black text-red-600">Rp{minDiscountedPrice.toLocaleString('id-ID')}</span>
+                    <span className="text-[10px] text-zinc-400 line-through">Rp{minPrice.toLocaleString('id-ID')}</span>
+                  </>
+                ) : (
+                  <span className={`text-xs font-black ${isDisabled ? 'text-zinc-400' : 'text-zinc-900'}`}>
+                    {minPrice === Infinity ? '-' : `Rp${minPrice.toLocaleString('id-ID')}`}
+                  </span>
+                )}
+              </div>
               <p className="text-[10px] text-zinc-400 mt-2 uppercase tracking-wider font-extrabold">{p.categoryName}</p>
             </div>
             
@@ -945,14 +1313,26 @@ export default function POSSimulator({
               </button>
               
               <div>
-                <h1 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
-                  AURA FOOD {derivedBranchName.toUpperCase()}
-                </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
+                    AURA FOOD {derivedBranchName.toUpperCase()}
+                  </h1>
+                </div>
                 <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">{`${activeBranch === 'ADMIN' ? 'PUSAT' : derivedBranchName}, NTB`}</p>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
+              <button 
+                onClick={triggerSync}
+                disabled={isSyncing}
+                className={`p-2 rounded-lg transition active:scale-95 flex items-center gap-1.5 border ${isSyncing ? 'bg-zinc-100 text-zinc-400 border-zinc-200' : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 shadow-sm'}`}
+                title="Sinkronisasi Menu & Promo"
+              >
+                <RefreshCw className={`h-5 w-5 ${isSyncing ? 'animate-spin' : 'text-red-600'}`} />
+                <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider pr-1">Aktualkan</span>
+              </button>
+
               <button
                 onClick={() => setShowCheckoutModal(true)}
                 disabled={cart.length === 0}
@@ -973,7 +1353,7 @@ export default function POSSimulator({
         </header>
 
         {addedItemMessage && (
-          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[10000000] animate-in slide-in-from-top-8 duration-500">
+          <div style={{ zIndex: 200000000 }} className="fixed top-24 left-1/2 -translate-x-1/2 animate-in slide-in-from-top-8 duration-500">
             <div className="px-5 py-3 rounded-[20px] bg-zinc-950 text-white flex items-center justify-center gap-3 shadow-2xl border border-zinc-800">
               <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 shrink-0">
                 <Check className="h-3 w-3 text-white" />
@@ -996,7 +1376,7 @@ export default function POSSimulator({
                 </span>
               </div>
 
-              <div className="space-y-3 pb-8 pl-1 pr-1">
+              <div className="space-y-3 pb-4 pl-1 pr-1 border-b border-zinc-100">
                 {cart.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-24 text-center bg-white border border-dashed border-zinc-300 rounded-3xl h-full">
                     <div className="h-16 w-16 bg-zinc-50 rounded-full flex items-center justify-center mb-3 border border-zinc-100">
@@ -1009,44 +1389,171 @@ export default function POSSimulator({
                   </div>
                 ) : (
                   effectiveCart.map((item) => (
-                    <div key={item.id_detail} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm text-left gap-4">
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-bold text-zinc-950 truncate leading-tight mb-1" title={getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}>{getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}</h4>
-                        <p className="text-[11px] text-zinc-500 font-medium">
-                          @ Rp{item.varian.HARGA.toLocaleString('id-ID')}
-                        </p>
+                    <div key={item.id_detail} className="flex flex-col bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm text-left gap-3">
+                      <div className="flex justify-between items-start gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h4 className="text-sm font-bold text-zinc-950 truncate leading-tight" title={getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}>{getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}</h4>
+                            {item.isCompliment && (
+                              <span className="bg-blue-100 text-blue-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full">Compliment</span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-zinc-500 font-medium mt-0.5">
+                            @ Rp{item.varian.HARGA.toLocaleString('id-ID')}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <span className={`text-xs font-black ${item.isCompliment ? 'text-zinc-400 line-through' : 'text-zinc-950'}`}>
+                            {item.isCompliment ? 'Gratis' : `Rp${((item.discountedPrice || item.varian.HARGA) * item.quantity).toLocaleString('id-ID')}`}
+                          </span>
+                          {item.menu.ID_MENU === 'PROMO' ? null : (
+                            <div className="flex items-center bg-zinc-50 border border-zinc-200 rounded-xl overflow-hidden h-8 shadow-sm">
+                              <button
+                                type="button"
+                                onClick={() => updateCartQty(item.varian.ID_VARIAN, -1)}
+                                className="px-3 hover:bg-zinc-200 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
+                              >
+                                <Minus className="h-3.5 w-3.5" />
+                              </button>
+                              <span className="px-2 font-mono text-sm font-extrabold text-zinc-900 min-w-[28px] text-center">
+                                {item.quantity}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => updateCartQty(item.varian.ID_VARIAN, 1)}
+                                className="px-3 hover:bg-zinc-200 hover:text-red-700 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex flex-col items-end gap-2.5 shrink-0">
-                        <span className="text-xs font-black text-zinc-950">
-                          Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}
-                        </span>
-                        {item.menu.ID_MENU === 'PROMO' ? null : (
-                          <div className="flex items-center bg-zinc-50 border border-zinc-200 rounded-xl overflow-hidden h-8 shadow-sm">
-                            <button
-                              type="button"
-                              onClick={() => updateCartQty(item.varian.ID_VARIAN, -1)}
-                              className="px-3 hover:bg-zinc-200 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </button>
-                            <span className="px-2 font-mono text-sm font-extrabold text-zinc-900 min-w-[28px] text-center">
-                              {item.quantity}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => updateCartQty(item.varian.ID_VARIAN, 1)}
-                              className="px-3 hover:bg-zinc-200 hover:text-red-700 text-zinc-700 h-full flex items-center transition active:bg-zinc-300"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      {item.menu.ID_MENU !== 'PROMO' && (
+                        <div className="flex items-center gap-2 pt-2 border-t border-zinc-50">
+                          <button 
+                            onClick={() => toggleCompliment(item.id_detail)}
+                            className={`flex-1 text-[9px] font-black uppercase px-3 py-1.5 rounded-xl border transition-all flex items-center justify-center gap-1.5 ${
+                              item.isCompliment 
+                                ? 'bg-blue-600 text-white border-blue-600' 
+                                : 'bg-white text-zinc-500 border-zinc-200 hover:text-blue-600 hover:border-blue-600'
+                            }`}
+                          >
+                            <Gift className="h-3 w-3" />
+                            {item.isCompliment ? 'Compliment Aktif' : 'Mark Compliment'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
               </div>
+
+              {/* ADDITIONAL CHARGES (Moved to bottom of cart list as requested) */}
+              <div className="mt-4 px-1 space-y-3">
+                <div className="flex justify-between items-center px-2">
+                   <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">Biaya Lain-lain</h5>
+                   {!isAddingCharge && !editingChargeId && (
+                     <button 
+                       onClick={() => setIsAddingCharge(true)}
+                       className="flex items-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold px-3 py-1.5 rounded-full transition active:scale-95 border border-zinc-200"
+                     >
+                       <Plus className="h-3 w-3" />
+                       <span className="text-[9px] uppercase tracking-wider">Tambah Biaya</span>
+                     </button>
+                   )}
+                </div>
+
+                <div className="space-y-2">
+                  {additionalCharges.map((c) => (
+                    <div key={c.id} className="p-4 rounded-2xl bg-zinc-50/50 border border-dashed border-zinc-200 flex justify-between items-center group relative">
+                       <div className="flex flex-col">
+                         <h4 className="text-[11px] font-black text-zinc-950 uppercase leading-tight tracking-tight">{c.name}</h4>
+                         <p className="text-[10px] font-bold text-zinc-400 mt-0.5 uppercase tracking-tight">
+                           {c.qty}x @Rp{c.price.toLocaleString('id-ID')}
+                         </p>
+                       </div>
+                       <div className="flex items-center gap-3">
+                         <div className="text-sm font-black text-red-800">
+                           Rp{(c.price * c.qty).toLocaleString('id-ID')}
+                         </div>
+                         <div className="flex gap-1">
+                           <button onClick={(e) => { e.stopPropagation(); handleEditCharge(c.id); }} className="p-1.5 bg-white hover:bg-zinc-100 text-zinc-600 rounded-lg shadow-sm border border-zinc-200 transition active:scale-90">
+                             <Pencil className="h-3.5 w-3.5 text-zinc-400" />
+                           </button>
+                           <button onClick={(e) => { e.stopPropagation(); handleDeleteCharge(c.id); }} className="p-1.5 bg-white hover:bg-red-100 text-red-500 rounded-lg shadow-sm border border-zinc-100 transition active:scale-90">
+                             <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                           </button>
+                         </div>
+                       </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* INLINE INPUT FORM (Simplified / Reverted style) */}
+                {(isAddingCharge || editingChargeId) && (
+                  <div className="bg-white border-2 border-dashed border-zinc-200 rounded-3xl p-5 shadow-sm animate-in slide-in-from-bottom-2 duration-300 mb-4 mx-1">
+                     <div className="flex justify-between items-center mb-4">
+                       <h5 className="text-[10px] font-black uppercase tracking-widest text-zinc-600 flex items-center gap-2">
+                         <Plus className="h-3 w-3" />
+                         {editingChargeId ? 'Edit Biaya' : 'Biaya Baru'}
+                       </h5>
+                       <button onClick={() => { setIsAddingCharge(false); setEditingChargeId(null); setNewCharge({name:'', price:0, qty:1}); }} className="p-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-full text-zinc-500 transition active:scale-90">
+                         <X className="h-4 w-4" />
+                       </button>
+                     </div>
+                     <div className="space-y-4">
+                       <div>
+                          <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 block text-left">Nama Layanan / Biaya</label>
+                          <input 
+                            autoFocus
+                            type="text"
+                            placeholder="Contoh: Ongkos Kirim / Parkir"
+                            value={newCharge.name}
+                            onChange={(e) => setNewCharge(prev => ({...prev, name: e.target.value}))}
+                            className="w-full bg-zinc-50 border border-zinc-200 p-3.5 rounded-2xl text-xs font-bold outline-none focus:border-red-500 focus:bg-white transition-all shadow-inner"
+                          />
+                       </div>
+                       <div className="grid grid-cols-2 gap-3">
+                         <div>
+                           <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 block text-left">Harga Satuan</label>
+                           <input 
+                             type="text"
+                             inputMode="numeric"
+                             placeholder="0"
+                             value={newCharge.price || ''}
+                             onChange={(e) => setNewCharge(prev => ({...prev, price: parseInt(e.target.value.replace(/\D/g,'')) || 0}))}
+                             className="w-full bg-zinc-50 border border-zinc-200 p-3.5 rounded-2xl text-xs font-bold outline-none focus:border-red-500 focus:bg-white transition-all shadow-inner"
+                           />
+                         </div>
+                         <div>
+                           <label className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 block text-left">Kuantitas</label>
+                           <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 p-1 rounded-2xl shadow-inner">
+                             <button onClick={() => setNewCharge(prev => ({...prev, qty: Math.max(1, prev.qty - 1)}))} className="h-10 w-10 bg-white rounded-xl shadow-sm border border-zinc-100 flex items-center justify-center text-zinc-600 active:scale-95 transition-all"><Minus className="h-4 w-4" /></button>
+                             <span className="flex-1 text-center text-xs font-black text-zinc-800">{newCharge.qty}</span>
+                             <button onClick={() => setNewCharge(prev => ({...prev, qty: prev.qty + 1}))} className="h-10 w-10 bg-white rounded-xl shadow-sm border border-zinc-100 flex items-center justify-center text-zinc-600 active:scale-95 transition-all"><Plus className="h-4 w-4" /></button>
+                           </div>
+                         </div>
+                       </div>
+                       <button 
+                         disabled={!newCharge.name || newCharge.price <= 0}
+                         onClick={handleSaveCharge}
+                         className="w-full bg-red-700 text-white py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-red-200 active:scale-95 transition-all hover:bg-red-800 disabled:opacity-50 disabled:grayscale"
+                       >
+                         Simpan Biaya
+                       </button>
+                     </div>
+                  </div>
+                )}
+              </div>
+
+              {cart.length > 0 && (
+                <div className="pt-2">
+                  {/* Removed manual add charge button from cart list as requested */}
+                </div>
+              )}
               
               {/* Persistent extra empty space at the bottom of the list to ensure the mobile bottom checkout bar NEVER covers any menus or buttons */}
               <div className="h-48 md:hidden" aria-hidden="true" />
@@ -1058,15 +1565,17 @@ export default function POSSimulator({
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-wide">
                   Katalog Menu
                 </h3>
-                {totalPortions > 0 && (
-                  <button 
-                    onClick={() => setShowCartPopup(true)}
-                    className="flex items-center gap-1.5 bg-red-100 text-red-800 font-extrabold px-3 py-1.5 rounded-full animate-in zoom-in-50 duration-300 hover:bg-red-200 transition cursor-pointer active:scale-95"
-                  >
-                    <div className="h-2 w-2 bg-red-600 rounded-full animate-pulse"></div>
-                    <span className="text-[10px] uppercase tracking-wider">{totalPortions} Porsi</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {totalPortions > 0 && (
+                    <button 
+                      onClick={() => setShowCartPopup(true)}
+                      className="flex items-center gap-1.5 bg-red-100 text-red-800 font-extrabold px-3 py-1.5 rounded-full animate-in zoom-in-50 duration-300 hover:bg-red-200 transition cursor-pointer active:scale-95"
+                    >
+                      <div className="h-2 w-2 bg-red-600 rounded-full animate-pulse"></div>
+                      <span className="text-[10px] uppercase tracking-wider">{totalPortions} Porsi</span>
+                    </button>
+                  )}
+                </div>
             </div>
             <div className="flex-1 overflow-hidden min-h-0">
               {renderCatalogGrid()}
@@ -1076,8 +1585,36 @@ export default function POSSimulator({
 
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-200 p-5 shadow-[0_-15px_30px_rgba(0,0,0,0.08)] z-40 pb-safe">
           <div className="flex justify-between items-center mb-3">
-            <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Total Harga</span>
-            <span className="text-xl font-black text-red-750">Rp{checkoutTotal.toLocaleString('id-ID')}</span>
+            <div className="flex flex-col relative">
+              <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1">
+                Total Pembayaran
+                {totalPromoDiscount > 0 && (
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPromoTooltip(showPromoTooltip === 'total_mobile' ? null : 'total_mobile');
+                    }}
+                    className="p-1 hover:bg-zinc-100 rounded-full transition"
+                  >
+                    <Info className="h-4 w-4 text-red-500" />
+                  </button>
+                )}
+              </span>
+              {showPromoTooltip === 'total_mobile' && (
+                <div className="absolute bottom-full left-0 mb-2 w-48 bg-zinc-900 text-white text-[10px] p-2 rounded-xl shadow-xl z-50">
+                  <p className="text-red-400 font-bold mb-1">PROMO TERAPLIKASI:</p>
+                  <p>Hemat Rp{totalPromoDiscount.toLocaleString('id-ID')}</p>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col items-end">
+              {totalPromoDiscount > 0 && (
+                <span className="text-[10px] font-bold text-zinc-400 line-through mb-0.5">
+                  Rp{(originalTotalBeforePromo + chargesTotal).toLocaleString('id-ID')}
+                </span>
+              )}
+              <span className="text-xl font-black text-red-750">Rp{(checkoutTotal + chargesTotal).toLocaleString('id-ID')}</span>
+            </div>
           </div>
           <div className="flex gap-2">
             <button
@@ -1097,11 +1634,11 @@ export default function POSSimulator({
           </div>
         </div>
 
-        {showCatalogModal && (
-          <div style={{ zIndex: 99999 }} className="md:hidden fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
+        {showCatalogModal && createPortal(
+          <div style={{ zIndex: 100000000 }} className="md:hidden fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
             <div className="bg-white w-full h-full shadow-2xl flex flex-col animate-in slide-in-from-bottom-12">
               <div className="p-4 border-b border-zinc-200 flex justify-between items-center shrink-0 pt-safe">
-                <h3 className="text-base font-black text-zinc-900 uppercase tracking-tight pl-2">Katalog Menu</h3>
+                <h3 className="text-base font-black text-zinc-900 uppercase tracking-tight pl-2 text-red-750">Katalog</h3>
                 <div className="flex items-center gap-2">
                   {totalPortions > 0 && (
                     <button 
@@ -1125,10 +1662,10 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
         {isSyncing && (
-          <div style={{ zIndex: 10000002 }} className="fixed bottom-6 right-6 flex items-center gap-3 bg-zinc-900/90 text-white px-5 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-5 duration-300 backdrop-blur-md border border-zinc-700/50">
+          <div style={{ zIndex: 100000000 }} className="fixed bottom-6 right-6 flex items-center gap-3 bg-zinc-900/90 text-white px-5 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-5 duration-300 backdrop-blur-md border border-zinc-700/50">
             <RefreshCw className="h-5 w-5 animate-spin text-emerald-400" />
             <div className="flex flex-col">
               <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">Sinkronisasi</span>
@@ -1137,8 +1674,8 @@ export default function POSSimulator({
           </div>
         )}
 
-        {showCheckoutModal && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+        {showCheckoutModal && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md xl:max-w-lg rounded-[28px] shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95">
               <div className="p-5 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 shrink-0">
                 <div>
@@ -1160,18 +1697,83 @@ export default function POSSimulator({
                   </label>
                   <div className="space-y-3 mb-4 max-h-[115px] overflow-y-auto pr-2 custom-scrollbar">
                     {effectiveCart.map(item => (
-                      <div key={item.id_detail} className="flex justify-between text-xs items-center">
-                        <span className="text-zinc-800 font-semibold leading-tight pr-4">
-                          <span className="font-extrabold text-zinc-950 inline-block w-6">{item.quantity}x</span> 
-                          {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
-                        </span>
-                        <span className="text-zinc-900 font-bold shrink-0">{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}</span>
+                      <div key={item.id_detail} className="bg-white p-3 rounded-2xl border border-zinc-100 shadow-sm">
+                        <div className="flex justify-between text-xs items-center mb-2">
+                          <span className="text-zinc-800 font-semibold leading-tight pr-4">
+                            <span className="font-extrabold text-zinc-950 inline-block w-6">{item.quantity}x</span> 
+                            {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
+                            {item.isCompliment && (
+                              <span className="ml-1.5 inline-block bg-blue-100 text-blue-700 text-[8px] px-1 rounded font-black uppercase tracking-tighter">FREE</span>
+                            )}
+                            {item.promoId && !item.isCompliment && (
+                               <span className="ml-1.5 inline-block bg-red-100 text-red-700 text-[8px] px-1 rounded font-black uppercase tracking-tighter">PROMO</span>
+                            )}
+                          </span>
+                          <span className="text-zinc-900 font-bold shrink-0 text-right">
+                            {item.isCompliment ? (
+                              <span className="text-blue-600">Gratis</span>
+                            ) : item.discountedPrice !== undefined ? (
+                              <div className="flex flex-col items-end leading-none gap-0.5">
+                                 <span className="text-red-700 font-black">Rp{(item.discountedPrice * item.quantity).toLocaleString('id-ID')}</span>
+                                 <span className="text-[9px] text-zinc-400 line-through font-normal">Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}</span>
+                              </div>
+                            ) : (
+                              `Rp${(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}`
+                            )}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
+
+                  {additionalCharges.length > 0 && (
+                    <div className="mb-4 space-y-2 pb-3 border-b border-zinc-100">
+                      <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">Biaya Tambahan</p>
+                      {additionalCharges.map((c, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-zinc-800">{c.qty}x {c.name}</span>
+                          </div>
+                          <span className="font-bold text-zinc-900">Rp{(c.price * c.qty).toLocaleString('id-ID')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="flex justify-between items-center pt-3 border-t border-dashed border-zinc-300">
-                    <span className="text-sm font-black text-zinc-900 uppercase">Total Tagihan</span>
-                    <span className="text-xl font-black text-red-750">Rp{checkoutTotal.toLocaleString('id-ID')}</span>
+                    <div className="flex flex-col relative">
+                      <span className="text-sm font-black text-zinc-900 uppercase flex items-center gap-1.5">
+                        Total Tagihan
+                        {totalPromoDiscount > 0 && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowPromoTooltip(showPromoTooltip === 'total_desktop' ? null : 'total_desktop');
+                            }}
+                            className="p-1 hover:bg-zinc-100 rounded-full transition"
+                          >
+                            <Info className="h-4 w-4 text-red-500" />
+                          </button>
+                        )}
+                      </span>
+                      {totalPromoDiscount > 0 && (
+                        <span className="text-[10px] font-black text-red-600 uppercase">Hemat Rp{totalPromoDiscount.toLocaleString('id-ID')}</span>
+                      )}
+                      {showPromoTooltip === 'total_desktop' && (
+                        <div className="absolute bottom-full left-0 mb-2 w-56 bg-zinc-900 text-white text-xs p-3 rounded-xl shadow-xl z-50">
+                          <p className="text-red-400 font-bold mb-1">PROMO TERAPLIKASI:</p>
+                          <p>Total normal: Rp{(originalTotalBeforePromo + chargesTotal).toLocaleString('id-ID')}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end">
+                      {totalPromoDiscount > 0 && (
+                        <span className="text-[11px] font-bold text-zinc-400 line-through mb-0.5">
+                          Rp{(originalTotalBeforePromo + chargesTotal).toLocaleString('id-ID')}
+                        </span>
+                      )}
+                      <span className="text-2xl font-black text-red-750">Rp{(checkoutTotal + chargesTotal).toLocaleString('id-ID')}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1239,7 +1841,8 @@ export default function POSSimulator({
                         <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${isCompliment ? 'translate-x-5' : 'translate-x-1'}`} />
                       </div>
                     </div>
-                    
+                  </div>
+
                     <div className="mt-3">
                       <label className="text-[10px] font-black text-zinc-500 block mb-1.5 uppercase tracking-wider">
                         Catatan Pesanan
@@ -1254,9 +1857,8 @@ export default function POSSimulator({
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="p-5 border-t border-zinc-100 bg-white flex flex-col gap-3 shrink-0">
+                <div className="p-5 border-t border-zinc-100 bg-white flex flex-col gap-3 shrink-0">
                   <div className="flex items-center justify-between bg-zinc-50 p-3 rounded-xl border border-zinc-200 cursor-pointer" onClick={() => setAutoPrint(!autoPrint)}>
                     <div className="flex flex-col">
                       <span className="text-xs font-black text-zinc-900">Cetak & Preview Struk</span>
@@ -1277,10 +1879,10 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
-        {showCartPopup && (
-          <div style={{ zIndex: 10000001 }} className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in" onClick={() => setShowCartPopup(false)}>
+        {showCartPopup && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in" onClick={() => setShowCartPopup(false)}>
               <div 
                 className="bg-white w-full max-w-sm rounded-[32px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 h-[90vh] sm:h-[80vh]"
                 onClick={e => e.stopPropagation()}
@@ -1297,42 +1899,122 @@ export default function POSSimulator({
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-50/50">
-                    {effectiveCart.map(item => (
-                      <div key={item.id_detail} className="flex justify-between items-center bg-white p-3.5 rounded-2xl border border-zinc-100 shadow-sm">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-black text-zinc-900 truncate">
-                              <span className="text-red-700">{item.quantity}x</span> {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
-                            </p>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-50/50">
+                        {effectiveCart.map(item => {
+                          const isPromo = item.menu.ID_MENU === 'PROMO';
+                          const isComplimentItem = item.isCompliment;
+                          
+                          return (
+                            <div key={item.id_detail} className={`flex justify-between items-center bg-white p-3.5 rounded-2xl border border-zinc-100 shadow-sm ${isPromo ? 'bg-rose-50 border-rose-100' : ''}`}>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="text-[11px] font-black text-zinc-900 truncate">
+                                      {!isPromo && <span className="text-red-700">{item.quantity}x</span>} {getFormattedMenuDisplay(item.menu.NAMA_MENU, item.varian.NAMA_VARIAN)}
+                                    </p>
+                                    {isComplimentItem && (
+                                      <span className="bg-blue-100 text-blue-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-blue-200">Compliment</span>
+                                    )}
+                                  </div>
+                                  {!isPromo && (
+                                    <div className="flex items-center gap-2 mt-1.5">
+                                      <button 
+                                        onClick={() => toggleCompliment(item.id_detail)}
+                                        className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg border transition-all ${
+                                          isComplimentItem 
+                                            ? 'bg-blue-600 text-white border-blue-600' 
+                                            : 'bg-white text-zinc-400 border-zinc-200 hover:text-blue-600 hover:border-blue-600'
+                                        }`}
+                                      >
+                                        Mark Compliment
+                                      </button>
+                                      <button 
+                                        onClick={() => removeFromCart(item.varian.ID_VARIAN)}
+                                        className="text-[8px] font-black uppercase px-2 py-1 bg-white text-zinc-400 border border-zinc-200 rounded-lg hover:text-red-600 hover:border-red-600 transition-all"
+                                      >
+                                        Hapus
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <p className={`text-[11px] font-black ${isPromo ? 'text-rose-700' : isComplimentItem ? 'text-zinc-400 line-through' : 'text-zinc-950'}`}>
+                                    {isComplimentItem ? 'Gratis' : `Rp${(item.isCompliment ? 0 : (item.discountedPrice || item.varian.HARGA) * item.quantity).toLocaleString('id-ID')}`}
+                                  </p>
+                                  {item.discountedPrice && !isPromo && !isComplimentItem && (
+                                    <p className="text-[9px] text-zinc-400 line-through font-bold">
+                                      Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}
+                                    </p>
+                                  )}
+                                </div>
+                            </div>
+                          );
+                        })}
+                        {effectiveCart.length === 0 && (
+                          <div className="h-full flex flex-col items-center justify-center text-zinc-400 py-10">
+                              <ShoppingCart className="h-8 w-8 mb-2 opacity-20" />
+                              <p className="text-[10px] font-bold uppercase tracking-widest">Keranjang Kosong</p>
                           </div>
-                          <div className="text-right shrink-0">
-                            <p className="text-[11px] font-black text-zinc-950">
-                              Rp{(item.varian.HARGA * item.quantity).toLocaleString('id-ID')}
-                            </p>
-                            {item.menu.ID_MENU !== 'PROMO' && (
-                              <button 
-                                onClick={() => removeFromCart(item.varian.ID_VARIAN)}
-                                className="text-[9px] font-bold text-red-700 hover:underline mt-1 bg-red-50 px-2 py-0.5 rounded-md"
-                              >
-                                Hapus
-                              </button>
-                            )}
-                          </div>
-                      </div>
-                    ))}
-                    {effectiveCart.length === 0 && (
-                      <div className="h-full flex flex-col items-center justify-center text-zinc-400 py-10">
-                          <ShoppingCart className="h-8 w-8 mb-2 opacity-20" />
-                          <p className="text-[10px] font-bold uppercase tracking-widest">Keranjang Kosong</p>
-                      </div>
-                    )}
-                </div>
+                        )}
+                    </div>
                 <div className="p-5 border-t border-zinc-100 bg-white">
                     <div className="flex justify-between items-end mb-4 px-1">
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Bayar</span>
-                        <span className="text-lg font-black text-red-800">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Subtotal Pesanan</span>
+                        <span className="text-sm font-bold text-zinc-900">
                           Rp{checkoutTotal.toLocaleString('id-ID')}
                         </span>
+                    </div>
+
+                    <div className="mb-4 border-t border-zinc-100 pt-4">
+                      {additionalCharges.length > 0 && (
+                         <div className="mb-3 space-y-2">
+                           <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">Biaya Tambahan</p>
+                           {additionalCharges.map((c, idx) => (
+                             <div key={idx} className="flex justify-between items-center bg-zinc-50 p-2 rounded-lg border border-zinc-100">
+                               <span className="text-[10px] font-bold text-zinc-800">{c.qty}x {c.name}</span>
+                               <div className="flex items-center gap-3">
+                                 <span className="text-[10px] font-black text-zinc-900">Rp{(c.price * c.qty).toLocaleString('id-ID')}</span>
+                                 <button onClick={() => setAdditionalCharges(prev => prev.filter((_, i) => i !== idx))} className="text-red-500">
+                                   <X className="h-3 w-3" />
+                                 </button>
+                               </div>
+                             </div>
+                           ))}
+                         </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between items-end mb-4 px-1 border-t border-zinc-200 pt-4 relative">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Bayar</span>
+                          {totalPromoDiscount > 0 && (
+                            <div className="group relative">
+                              <Info className="h-3 w-3 text-red-400 cursor-help" />
+                              <div className="absolute bottom-full left-0 mb-2 w-48 p-2 bg-zinc-900 text-[9px] text-white font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                                <p className="text-red-400 mb-1">PROMO TERAPLIKASI:</p>
+                                {effectiveCart.filter(item => item.menu.ID_MENU === 'PROMO').map((p, idx) => (
+                                  <div key={idx} className="flex justify-between border-b border-white/10 pb-1 mb-1 last:border-0 last:mb-0">
+                                    <span>{p.menu.NAMA_MENU}</span>
+                                    <span>Rp{p.varian.HARGA.toLocaleString('id-ID')}</span>
+                                  </div>
+                                ))}
+                                <div className="pt-1 mt-1 border-t border-white/20 flex justify-between text-zinc-300">
+                                  <span>Total Potongan</span>
+                                  <span>-Rp{totalPromoDiscount.toLocaleString('id-ID')}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          {totalPromoDiscount > 0 && (
+                            <p className="text-[11px] font-bold text-zinc-400 line-through mb-0.5">
+                              Rp{(checkoutTotal + totalPromoDiscount + chargesTotal).toLocaleString('id-ID')}
+                            </p>
+                          )}
+                          <span className="text-lg font-black text-red-800">
+                            Rp{(checkoutTotal + chargesTotal).toLocaleString('id-ID')}
+                          </span>
+                        </div>
                     </div>
                     <button 
                       onClick={() => {
@@ -1347,11 +2029,11 @@ export default function POSSimulator({
                 </div>
               </div>
           </div>
-        )}
+        , document.body)}
 
         {/* MODALS */}
-        {selectedMenuForVarian && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/50 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-300 ease-out" onClick={() => setSelectedMenuForVarian(null)}>
+        {selectedMenuForVarian && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/50 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4 animate-in fade-in duration-300 ease-out" onClick={() => setSelectedMenuForVarian(null)}>
             <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-sm flex flex-col max-h-[95vh] sm:max-h-[85vh] animate-in slide-in-from-bottom-32 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300 ease-out" onClick={e => e.stopPropagation()}>
               <div className="p-5 border-b border-zinc-100 flex justify-between items-center bg-zinc-50 rounded-t-3xl sm:rounded-t-3xl shrink-0">
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">Pilih Varian</h3>
@@ -1399,10 +2081,10 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
-        {confirmDeleteId && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setConfirmDeleteId(null)}>
+        {confirmDeleteId && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setConfirmDeleteId(null)}>
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="h-12 w-12 rounded-full bg-red-100 text-red-700 flex items-center justify-center mx-auto mb-4 border border-red-200">
                 <Trash2 className="h-6 w-6" />
@@ -1428,10 +2110,10 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
-        {confirmDiscardCart && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setConfirmDiscardCart(false)}>
+        {confirmDiscardCart && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setConfirmDiscardCart(false)}>
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="h-12 w-12 rounded-full bg-red-100 text-red-700 flex items-center justify-center mx-auto mb-4 border border-red-200">
                 <AlertCircle className="h-6 w-6" />
@@ -1458,10 +2140,10 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
-        {alertMessage && (
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+        {alertMessage && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95">
               {alertType === 'success' && (
                 <div className="h-12 w-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 border border-emerald-100">
@@ -1490,10 +2172,10 @@ export default function POSSimulator({
               </button>
             </div>
           </div>
-        )}
+        , document.body)}
 
-        {showPrinterWarning && (
-          <div style={{ zIndex: 10000002 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPrinterWarning(false)}>
+        {showPrinterWarning && createPortal(
+          <div style={{ zIndex: 100000000 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPrinterWarning(false)}>
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm text-center border border-zinc-200 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="h-12 w-12 rounded-full bg-red-100 text-red-700 flex items-center justify-center mx-auto mb-4 border border-red-200">
                 <Printer className="h-6 w-6" />
@@ -1516,7 +2198,7 @@ export default function POSSimulator({
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
 
         {showPrinterSettings && createPortal(
           <div className="fixed inset-0 z-[100000] bg-zinc-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPrinterSettings(false)}>
@@ -1571,9 +2253,8 @@ export default function POSSimulator({
                 </button>
               </div>
             </div>
-          </div>,
-          document.body
-        )}
+          </div>
+        , document.body)}
 
       </div>
     );
@@ -1582,7 +2263,7 @@ export default function POSSimulator({
   if (!isCreatingTx) {
     const todayDate = new Date();
     const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-    const displayDateStr = new Date(selectedReportDate).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    const displayDateStr = formatToIDDate(selectedReportDate, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     
     const todayTxs = history.filter(tx => {
       const d = new Date(tx.timestamp);
@@ -1632,17 +2313,17 @@ export default function POSSimulator({
               <div className="space-y-3 mb-2 shrink-0">
                 <div className="flex justify-between items-center px-1">
                   <h4 className="text-[13px] font-black text-zinc-800 tracking-tight flex items-center gap-2">Statistik {isToday ? 'Hari Ini' : 'Harian'}</h4>
-                  <div className={`relative flex items-center gap-2 bg-white border border-zinc-200 shadow-sm rounded-lg px-2.5 py-1.5 transition-all ${isMetricsLoading ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:border-zinc-300 cursor-pointer'}`}>
+                  <div className={`relative flex items-center gap-2 bg-white border border-zinc-200 shadow-sm rounded-lg px-2.5 py-1.5 transition-all ${(isMetricsLoading || isInitialLoading) ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:border-zinc-300 cursor-pointer'}`}>
                     <Calendar className="h-3.5 w-3.5 text-emerald-650 shrink-0" />
                     <span className="text-[10px] font-extrabold text-zinc-700 tracking-tight">
-                      {isMetricsLoading ? "Loading..." : new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(selectedReportDate))}
+                      {(isMetricsLoading || isInitialLoading) ? "Loading..." : formatToIDDate(selectedReportDate, { day: '2-digit', month: 'short', year: 'numeric' })}
                     </span>
                     <ChevronDown className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                     <input 
                       type="date"
                       value={selectedReportDate}
                       max={todayStr}
-                      disabled={isMetricsLoading}
+                      disabled={isMetricsLoading || isInitialLoading}
                       onChange={async (e) => {
                         if (e.target.value) {
                            if (e.target.value > todayStr) {
@@ -1741,8 +2422,8 @@ export default function POSSimulator({
                 </div>
                 <button
                   onClick={handleOpenReport}
-                  disabled={isMetricsLoading}
-                  className={`w-full bg-emerald-50 border border-emerald-200/60 text-emerald-800 py-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition shadow-sm mt-3 ${isMetricsLoading ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-emerald-100 active:scale-95'}`}
+                  disabled={isMetricsLoading || isInitialLoading}
+                  className={`w-full bg-emerald-50 border border-emerald-200/60 text-emerald-800 py-3.5 rounded-2xl flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition shadow-sm mt-3 ${(isMetricsLoading || isInitialLoading) ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'hover:bg-emerald-100 active:scale-95'}`}
                 >
                    <Banknote className="h-4 w-4" /> Laporkan Omset {isToday ? 'Hari Ini' : 'Harian'}
                 </button>
@@ -1791,7 +2472,10 @@ export default function POSSimulator({
                   <ReceiptText className="h-8 w-8 text-zinc-300 mb-3" />
                   <p className="text-zinc-500 font-medium text-xs mb-3">Belum ada transaksi dibuat.</p>
                   <button 
-                    onClick={() => setIsCreatingTx(true)}
+                    onClick={() => {
+                      loadDataFromDB(true);
+                      setIsCreatingTx(true);
+                    }}
                     disabled={isInitialLoading}
                     className={`bg-red-700 text-white hover:bg-red-800 font-black text-xs px-6 py-4 rounded-2xl transition flex items-center justify-center gap-2 shadow-lg active:scale-95 uppercase tracking-widest w-full sm:w-auto ${isInitialLoading ? 'opacity-50 grayscale cursor-not-allowed' : 'cursor-pointer'}`}
                   >
@@ -1843,7 +2527,7 @@ export default function POSSimulator({
                           <div className="flex justify-between items-end mt-2">
                             <div className="leading-tight">
                               <p className="text-[10px] text-zinc-500 font-medium">
-                                {new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {new Date(tx.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
+                                {formatToIDDate(tx.timestamp, { day: '2-digit', month: 'short', year: 'numeric' })} &bull; {tx.paymentMethod || (tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'Compliment' : '')}
                               </p>
                             </div>
                             <p className="text-sm font-black text-zinc-950">
@@ -1860,30 +2544,6 @@ export default function POSSimulator({
           </div>
         </div>
 
-        {selectedTransactionForKasir && previewType === 'inline' && (
-          <div ref={previewRef} className="mt-8 w-full bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm animate-in zoom-in-95 duration-300">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-zinc-900 text-sm">Pratinjau Struk</h3>
-              <button 
-                onClick={() => setSelectedTransactionForKasir(null)}
-                className="bg-red-50 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded-lg text-xs font-bold"
-              >
-                Tutup
-              </button>
-            </div>
-            <div className="p-4 bg-white rounded-lg flex justify-center mb-4">
-                <ReceiptThermal 
-                  transaction={selectedTransactionForKasir} 
-                  branchName={derivedBranchName} 
-                  branchLocation={masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(selectedTransactionForKasir.cabang))?.LOKASI}
-                />
-            </div>
-            <button className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" onClick={() => printReceiptAndUpload(selectedTransactionForKasir)}>
-                Cetak Struk Sekarang
-            </button>
-          </div>
-        )}
-
         {/* Modal Pratinjau Struk untuk Kasir */}
         {selectedTransactionForKasir && previewType === 'popup' && (
           <div className="fixed inset-0 z-[1000] bg-zinc-950/60 backdrop-blur-sm flex justify-center items-end p-4 animate-in fade-in duration-200" onClick={() => { setSelectedTransactionForKasir(null); onSelectTransaction(null); }}>
@@ -1899,7 +2559,7 @@ export default function POSSimulator({
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <div className="p-5 max-h-[60vh] overflow-y-auto bg-neutral-100 flex justify-center">
+              <div className="p-5 max-h-[60vh] overflow-y-auto bg-white flex justify-center">
                  <ReceiptThermal 
                    transaction={selectedTransactionForKasir} 
                    branchName={derivedBranchName} 
@@ -1917,9 +2577,33 @@ export default function POSSimulator({
 
       </div>
 
+      {selectedTransactionForKasir && previewType === 'inline' && (
+        <div ref={previewRef} className="max-w-xl mx-auto mb-8 w-full bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm animate-in zoom-in-95 duration-300">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-zinc-900 text-sm">Pratinjau Struk</h3>
+            <button 
+              onClick={() => setSelectedTransactionForKasir(null)}
+              className="bg-red-700 text-white hover:bg-red-800 px-4 py-2 rounded-xl text-xs font-bold shadow-sm active:scale-95 transition cursor-pointer uppercase tracking-wider"
+            >
+              Tutup Pratinjau
+            </button>
+          </div>
+          <div className="p-4 bg-white rounded-lg flex justify-center mb-4">
+              <ReceiptThermal 
+                transaction={selectedTransactionForKasir} 
+                branchName={derivedBranchName} 
+                branchLocation={masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(selectedTransactionForKasir.cabang))?.LOKASI}
+              />
+          </div>
+          <button className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold text-xs py-3 rounded-xl transition flex items-center justify-center shadow-md active:scale-95 uppercase tracking-wider cursor-pointer" onClick={() => printReceiptAndUpload(selectedTransactionForKasir)}>
+              Cetak Struk Sekarang
+          </button>
+        </div>
+      )}
+
         {/* Modal Laporan Omset */}
         {showReportPopup && createPortal(
-          <div style={{ zIndex: 99999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex justify-center items-center p-4 animate-in fade-in duration-200" onClick={() => setShowReportPopup(false)}>
+          <div style={{ zIndex: 9999999 }} className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm flex justify-center items-center p-4 animate-in fade-in duration-200" onClick={() => setShowReportPopup(false)}>
             <div className="bg-white w-full max-w-sm rounded-[24px] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
               <div className="p-4 border-b border-zinc-200 flex justify-between items-center bg-zinc-50 font-sans">
                 <h3 className="text-sm font-black text-zinc-900 uppercase tracking-tight">
@@ -2022,20 +2706,20 @@ export default function POSSimulator({
                 </button>
               </div>
             </div>
-          </div>,
-          document.body
-        )}
+          </div>
+        , document.body)}
 
         {activeBranch !== 'ADMIN' && createPortal(
           <button
             onClick={() => {
               if (isInitialLoading) return;
+              loadDataFromDB(true);
               setCart([]);
               setIsCreatingTx(true);
               onSelectTransaction(null);
             }}
             disabled={isInitialLoading}
-            className={`fixed bottom-6 right-4 md:bottom-8 md:right-8 h-14 w-14 md:h-16 md:w-16 bg-red-700 text-white rounded-full shadow-2xl flex items-center justify-center transition active:scale-95 z-40 cursor-pointer ${isInitialLoading ? 'opacity-50 cursor-not-allowed grayscale' : 'hover:bg-red-800'}`}
+            className={`fixed bottom-6 right-4 md:bottom-8 md:right-8 h-14 w-14 md:h-16 md:w-16 bg-red-700 text-white rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.2)] flex items-center justify-center transition active:scale-95 z-[99999] cursor-pointer ${isInitialLoading ? 'opacity-50 cursor-not-allowed grayscale' : 'hover:bg-red-800'}`}
           >
             <div className="relative">
               {isInitialLoading ? (
@@ -2049,9 +2733,8 @@ export default function POSSimulator({
                 </>
               )}
             </div>
-          </button>,
-          document.body
-        )}
+          </button>
+        , document.body)}
 
 
         {showPrinterSettings && createPortal(
@@ -2107,13 +2790,10 @@ export default function POSSimulator({
                 </button>
               </div>
             </div>
-          </div>,
-          document.body
-        )}
+          </div>
+        , document.body)}
 
       </>
     );
   }
-
-
 }

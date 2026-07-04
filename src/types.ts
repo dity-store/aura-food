@@ -74,6 +74,8 @@ export interface Pesanan {
   METODE_BAYAR: string;
   JENIS_PESANAN?: string;
   CATATAN?: string;
+  ADDITIONAL_CHARGES?: { name: string; price: number; qty: number }[];
+  PROMOS?: any[];
 }
 
 export interface DetailPesanan {
@@ -81,18 +83,27 @@ export interface DetailPesanan {
   ID_PESANAN: string;
   NAMA_MENU: string;
   VARIAN: string;
+  ID_MENU?: string;
+  ID_VARIAN?: string;
   HARGA_SATUAN: number;
   QTY: number;
   SUBTOTAL: number;
+  PROMO_ID?: string;
+  ORIGINAL_PRICE?: number;
+  isCompliment?: boolean;
 }
 
 export interface Promo {
   ID_PROMO: string;
   NAMA_PROMO: string;
-  TIPE: string;
-  TARGET_ITEM: string;
+  TIPE: 'DISKON_PERSEN' | 'DISKON_NOMINAL' | 'HARGA_FIX';
+  PERIODE: string; // Will store the date range string
+  TARGET_ITEM: string; // Pipe separated variant IDs
   SYARAT_QTY: number;
   NILAI_PROMO: number;
+  ID_CABANG: string; // Pipe separated branch IDs or 'ALL'
+  JENIS_PROMO: 'PER_PESANAN' | 'PER_MENU';
+  JENIS_PERIODE: 'JAM' | 'HARIAN' | 'TANGGAL' | 'RENTANG';
 }
 
 export interface CartItem {
@@ -100,6 +111,9 @@ export interface CartItem {
   menu: Menu;
   varian: Varian;
   quantity: number;
+  discountedPrice?: number;
+  promoId?: string;
+  isCompliment?: boolean;
 }
 
 export interface Transaction {
@@ -111,6 +125,8 @@ export interface Transaction {
   paymentMethod: string;
   totalAmount: number;
   cabang: string;
+  isCompliment?: boolean;
+  isPrinting?: boolean;
 }
 
 export interface SyncQueueItem {

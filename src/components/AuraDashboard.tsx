@@ -1,3 +1,4 @@
+import { formatToIDDate, formatToIDDateTime } from "../utils/date";
 import confetti from 'canvas-confetti';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -286,7 +287,7 @@ export default function AuraDashboard({
           setSessionDashboard(currentParamsKey, metrics);
         }
       } catch (err: any) {
-        console.error("Gagal memuat metrik dashboard admin dari GAS, menghitung metrik lokal:", err);
+        console.warn("Metrik dashboard admin dari GAS tidak tersedia, menggunakan data lokal.", err);
         try {
           const txsLocal = await getTransactions();
           const currentDateStr = selectedAdminDate;
@@ -613,16 +614,15 @@ export default function AuraDashboard({
 
   // Decide source of metric values (whether to read from server-side adminMetrics or local calculated variables)
 
-  const totalRevenue = isServerAdmin 
-    ? (adminMetrics?.totalRevenue || 0)
-    : transactions.reduce((sum, tx) => {
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        return isCompliment ? sum : sum + (tx.totalAmount || 0);
-      }, 0);
+  // Calculate all metrics locally from the transactions list to ensure consistency
+  // regardless of whether we are in admin mode or branch mode.
+  const totalRevenue = transactions.reduce((sum, tx) => {
+    const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+    return isCompliment ? sum : sum + (tx.totalAmount || 0);
+  }, 0);
 
   const getRevenueGrowthStyles = () => {
     if (!adminMetrics) return { text: "0%", classes: "text-zinc-500 bg-zinc-50" };
-    // totalRevenue can be local or remote, today is totalRevenue
     const yesterday = adminMetrics.yesterdayRevenue || 0;
     const today = totalRevenue;
     
@@ -638,62 +638,47 @@ export default function AuraDashboard({
     return { text, classes };
   };
 
-  const totalTransactionsCount = isServerAdmin
-    ? (adminMetrics?.totalTransactions || 0)
-    : transactions.reduce((sum, tx) => {
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        return isCompliment ? sum : sum + 1;
-      }, 0);
+  const totalTransactionsCount = transactions.reduce((sum, tx) => {
+    const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+    return isCompliment ? sum : sum + 1;
+  }, 0);
 
-  const totalCashVal = isServerAdmin
-    ? (adminMetrics?.totalCash || 0)
-    : transactions.reduce((sum, tx) => {
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        if (isCompliment) return sum;
-        const method = String(tx.paymentMethod || '').toUpperCase();
-        return (method === 'CASH' || method === 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
-      }, 0);
+  const totalCashVal = transactions.reduce((sum, tx) => {
+    const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+    if (isCompliment) return sum;
+    const method = String(tx.paymentMethod || '').toUpperCase();
+    return (method === 'CASH' || method === 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
+  }, 0);
 
-  const totalTransferVal = isServerAdmin
-    ? (adminMetrics?.totalTransfer || 0)
-    : transactions.reduce((sum, tx) => {
-        const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
-        if (isCompliment) return sum;
-        const method = String(tx.paymentMethod || '').toUpperCase();
-        return (method !== 'CASH' && method !== 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
-      }, 0);
+  const totalTransferVal = transactions.reduce((sum, tx) => {
+    const isCompliment = String(tx.pesanan?.JENIS_PESANAN || tx.paymentMethod || '').toUpperCase() === 'COMPLIMENT';
+    if (isCompliment) return sum;
+    const method = String(tx.paymentMethod || '').toUpperCase();
+    return (method !== 'CASH' && method !== 'TUNAI') ? sum + (tx.totalAmount || 0) : sum;
+  }, 0);
 
-  const avgTx = isServerAdmin
-    ? (adminMetrics?.averageTransactionValue || 0)
-    : (transactions.length > 0 ? Math.round(totalRevenue / transactions.length) : 0);
+  const avgTx = (transactions.length > 0 ? Math.round(totalRevenue / transactions.length) : 0);
 
-  // Recalculate categories
+  // Recalculate categories locally from transaction list
   let mak = 0;
   let min = 0;
   let pas = 0;
   let spe = 0;
 
-  if (isServerAdmin && adminMetrics) {
-    mak = adminMetrics.categorySales.Makanan || 0;
-    min = adminMetrics.categorySales.Minuman || 0;
-    pas = adminMetrics.categorySales.Pasta || 0;
-    spe = adminMetrics.categorySales.Special || 0;
-  } else {
-    transactions.forEach(tx => {
-      tx.detail?.forEach(item => {
-        const nm = String(item.NAMA_MENU || '').toLowerCase();
-        if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) {
-          pas += item.QTY || 1;
-        } else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) {
-          spe += item.QTY || 1;
-        } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh') || nm.includes('yakult') || nm.includes('matcha') || nm.includes('squash') || nm.includes('chocolate')) {
-          min += item.QTY || 1;
-        } else {
-          mak += item.QTY || 1;
-        }
-      });
+  transactions.forEach(tx => {
+    tx.detail?.forEach(item => {
+      const nm = String(item.NAMA_MENU || '').toLowerCase();
+      if (nm.includes('pasta') || nm.includes('spaghetti') || nm.includes('macaroni')) {
+        pas += item.QTY || 1;
+      } else if (nm.includes('special') || nm.includes("aura's") || nm.includes('auras')) {
+        spe += item.QTY || 1;
+      } else if (nm.includes('es ') || nm.includes('kopi') || nm.includes('mojito') || nm.includes('air') || nm.includes('teh') || nm.includes('yakult') || nm.includes('matcha') || nm.includes('squash') || nm.includes('chocolate')) {
+        min += item.QTY || 1;
+      } else {
+        mak += item.QTY || 1;
+      }
     });
-  }
+  });
 
   const tSales = mak + min + pas + spe;
   const foodRatio = tSales > 0 ? (mak / tSales) * 100 : 0;
@@ -716,7 +701,7 @@ export default function AuraDashboard({
 
   const getLaporanText = () => {
     const dNow = new Date(selectedAdminDate);
-    const hari = new Intl.DateTimeFormat('id-ID', { weekday: 'long' }).format(dNow);
+    const hari = formatToIDDate(dNow, { weekday: 'long' });
     const mN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
     const tglText = `${dNow.getDate().toString().padStart(2, '0')} ${mN[dNow.getMonth()]} ${dNow.getFullYear()}`;
     
@@ -726,9 +711,9 @@ export default function AuraDashboard({
     const currentBranch = activeBranch === 'ADMIN' ? selectedAdminBranch : activeBranch;
     const cName = currentBranch === 'Semua' ? 'Semua Cabang (Gabungan)' : (cabangList.find(c => String(c.ID_CABANG) === currentBranch)?.NAMA_CABANG || currentBranch);
     
-    let currentTotalRevenue = isServerAdmin ? (adminMetrics?.totalRevenue || 0) : (totalRevenue || 0);
-    let currentTotalCash = isServerAdmin ? (adminMetrics?.totalCash || 0) : (totalCashVal || 0);
-    let currentTotalTransfer = isServerAdmin ? (adminMetrics?.totalTransfer || 0) : (totalTransferVal || 0);
+    let currentTotalRevenue = totalRevenue;
+    let currentTotalCash = totalCashVal;
+    let currentTotalTransfer = totalTransferVal;
     
     if (currentBranch === 'Semua' && activeBranch === 'ADMIN') {
       const breakdown = getBranchBreakdown();
@@ -1121,7 +1106,7 @@ export default function AuraDashboard({
                           {tx.timestamp ? (
                             isNaN(new Date(tx.timestamp).getTime())
                               ? String(tx.timestamp)
-                              : new Date(tx.timestamp).toLocaleString('id-ID')
+                              : formatToIDDateTime(tx.timestamp)
                           ) : 'Beberapa saat yang lalu'}
                         </span>
                         <span>&bull;</span>
@@ -1208,7 +1193,7 @@ export default function AuraDashboard({
                   <div className="space-y-2 mt-2 bg-white/80 p-3 rounded-xl border border-emerald-150 backdrop-blur-sm text-left">
                     <p className="text-xs text-zinc-700 flex items-center gap-2">
                       <Calendar className="h-3.5 w-3.5 text-zinc-500" /> 
-                      <span><b className="text-zinc-900 font-extrabold">Tanggal:</b> {new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date(selectedAdminDate))}</span>
+                      <span><b className="text-zinc-900 font-extrabold">Tanggal:</b> {formatToIDDate(selectedAdminDate, { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</span>
                     </p>
                     <p className="text-xs text-zinc-700 flex items-center gap-2">
                       <TrendingUp className="h-3.5 w-3.5 text-emerald-600" /> 

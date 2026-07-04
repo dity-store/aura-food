@@ -542,7 +542,12 @@ export default function RekapOperasionalPanel({ cabangList, onBack }: RekapOpera
     text += `🔓 Total Hari Buka: ${metrics.daysOpen} Hari\n`;
     text += `🚫 Total Hari Tutup: ${totalHariLibur} Hari\n`;
     text += `👥 Total Pegawai: ${totalStaffCount} Orang\n`;
-    text += `📝 Total Izin: ${totalIzinCount} Izin\n`;
+    text += `📝 Total Izin: ${totalIzinCount} Izin\n\n`;
+
+    text += `*💰 RINGKASAN KEUANGAN:*\n`;
+    text += `💵 Total Omset: Rp${metrics.totalRevenue.toLocaleString('id-ID')}\n`;
+    text += `📥 Total Cash Masuk: Rp${metrics.totalCashIn.toLocaleString('id-ID')}\n`;
+    text += `📤 Total Cash Keluar: Rp${metrics.totalCashOut.toLocaleString('id-ID')}\n\n`;
 
     staffListToUse.forEach(p => {
       const pIzinCount = processedDays.reduce((acc, day) => {

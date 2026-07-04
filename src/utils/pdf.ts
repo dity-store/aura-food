@@ -1,3 +1,4 @@
+import { formatToIDDateTime } from "./date";
 import jsPDF from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import { Transaction } from '../types';
@@ -10,9 +11,11 @@ import { getGASConfig, getMasterData } from './db';
  */
 export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: string) => {
   try {
-    const masterData = await getMasterData().catch(() => null);
-    const branchObj = masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(tx.cabang || activeBranch));
-    const finalBranchLocation = branchObj?.LOKASI || 'Jl. R Suprapto, Taman Sari, Mataram';
+    const branchName = tx.cabang || tx.pesanan?.ID_CABANG || activeBranch || 'MATARAM';
+    const isPraya = branchName === 'PRAYA' || tx.pesanan?.ID_CABANG === '1' || activeBranch === '1';
+    const finalBranchLocation = isPraya 
+      ? "Jl. Raya Praya Mantang, Ujan Rintis, Praya"
+      : "Jl. R Suprapto, Taman Sari, Mataram";
 
     // PDF Size: 80mm width (thermal), dynamic height
     // We estimate height based on items
@@ -56,7 +59,8 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     const valueX = 22;
     
     pdf.text('No.', labelX, y); pdf.text(`: ${tx.id}`, valueX, y); y += 4;
-    pdf.text('Tgl.', labelX, y); pdf.text(`: ${new Date(tx.timestamp).toLocaleString('id-ID')}`, valueX, y); y += 4;
+    pdf.text('Tgl.', labelX, y); pdf.text(`: ${formatToIDDateTime(tx.timestamp)}`, valueX, y); y += 4;
+    pdf.text('Cabang', labelX, y); pdf.text(`: ${branchName}`, valueX, y); y += 4;
     pdf.text('Metode', labelX, y); pdf.text(`: ${tx.pesanan?.JENIS_PESANAN === 'Compliment' ? 'GRATIS' : tx.paymentMethod.toUpperCase()}`, valueX, y); y += 4;
     
     if (tx.pesanan?.JENIS_PESANAN === 'Compliment') {
@@ -81,12 +85,13 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
 
     // Items
     tx.detail.forEach((item) => {
-      pdf.setFont('courier', 'bold');
+      // Skip system items that are handled separately as promos/charges
+      if (item.ID_MENU === 'PROMO' || item.HARGA_SATUAN < 0 || item.ID_MENU === 'CHARGE') return;
       
-      // Handle multi-line menu names (Max 2 lines as requested)
+      pdf.setFont('courier', 'bold');
       const menuName = getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN);
       const splitName = pdf.splitTextToSize(menuName, 35);
-      const displayLines = splitName.slice(0, 2); // Max 2 lines
+      const displayLines = splitName.slice(0, 2);
       
       pdf.text(displayLines, 5, y);
       pdf.text(String(item.QTY), 45, y, { align: 'right' });
@@ -101,6 +106,62 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
       y += 5;
     });
 
+    // Promos & Charges Section (Itemized)
+    const fullCatatan = tx.pesanan?.CATATAN || '';
+    const parts = fullCatatan.split('|');
+    const promos: { name: string, amount: number }[] = [];
+    const charges: { name: string, amount: number }[] = [];
+
+    // From structured metadata
+    if (tx.pesanan?.PROMOS) {
+      tx.pesanan.PROMOS.forEach(p => {
+        const price = p.discountedPrice !== undefined ? p.discountedPrice : p.varian.HARGA;
+        promos.push({ name: p.menu.NAMA_MENU, amount: price * p.quantity });
+      });
+    }
+    if (tx.pesanan?.ADDITIONAL_CHARGES) {
+      tx.pesanan.ADDITIONAL_CHARGES.forEach(c => {
+        charges.push({ name: c.name, amount: c.price * c.qty });
+      });
+    }
+
+    // Fallback: Parse from string
+    if (promos.length === 0 && parts.length >= 1 && parts[0].trim() && parts[0].trim() !== 'Promo/Potongan') {
+      parts[0].trim().split(', ').forEach(item => {
+        const match = item.match(/(.*) \(-Rp([\d.]+)\)/);
+        if (match) promos.push({ name: match[1], amount: -Number(match[2].replace(/\./g, '')) });
+      });
+    }
+    if (charges.length === 0 && parts.length >= 2 && parts[1].trim()) {
+      parts[1].trim().split(', ').forEach(item => {
+        const match = item.match(/(.*) \(Rp([\d.]+)\)/);
+        if (match) charges.push({ name: match[1], amount: Number(match[2].replace(/\./g, '')) });
+      });
+    }
+
+    if (promos.length > 0 || charges.length > 0) {
+      pdf.text('-'.repeat(45), centerX, y, { align: 'center' });
+      y += 4;
+      
+      promos.forEach(p => {
+        pdf.setFont('courier', 'bold');
+        pdf.text(p.name.replace('[PROMO] ', ''), 5, y);
+        pdf.setFont('courier', 'normal');
+        pdf.text('1', 45, y, { align: 'right' });
+        pdf.text(`-Rp${Math.abs(p.amount).toLocaleString('id-ID')}`, 75, y, { align: 'right' });
+        y += 5;
+      });
+
+      charges.forEach(c => {
+        pdf.setFont('courier', 'bold');
+        pdf.text(c.name, 5, y);
+        pdf.setFont('courier', 'normal');
+        pdf.text('1', 45, y, { align: 'right' });
+        pdf.text(`Rp${c.amount.toLocaleString('id-ID')}`, 75, y, { align: 'right' });
+        y += 5;
+      });
+    }
+
     // Subtotal Separator
     pdf.text('==========================================', centerX, y, { align: 'center' });
     y += 6;
@@ -110,17 +171,20 @@ export const generateAndUploadReceipt = async (tx: Transaction, activeBranch: st
     pdf.setFont('courier', 'bold');
     pdf.text('TOTAL', 5, y);
     pdf.text(`Rp${tx.totalAmount.toLocaleString('id-ID')}`, 75, y, { align: 'right' });
-    y += 8;
+    y += 10;
 
     if (tx.pesanan?.CATATAN) {
-      pdf.setFontSize(8);
-      pdf.setFont('courier', 'bold');
-      pdf.text('Catatan:', 5, y);
-      y += 4;
-      pdf.setFont('courier', 'normal');
-      const splitCatatan = pdf.splitTextToSize(tx.pesanan.CATATAN, 70);
-      pdf.text(splitCatatan, 5, y);
-      y += (splitCatatan.length * 4) + 4;
+      const displayNote = parts.length >= 3 ? parts[2].trim() : (fullCatatan.includes('|') ? '' : fullCatatan.trim());
+      if (displayNote) {
+        pdf.setFontSize(8);
+        pdf.setFont('courier', 'bold');
+        pdf.text('Catatan:', 5, y);
+        y += 4;
+        pdf.setFont('courier', 'normal');
+        const splitCatatan = pdf.splitTextToSize(displayNote, 70);
+        pdf.text(splitCatatan, 5, y);
+        y += (splitCatatan.length * 4) + 4;
+      }
     }
 
     // Footer

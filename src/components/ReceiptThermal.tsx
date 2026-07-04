@@ -93,60 +93,182 @@ export default function ReceiptThermal({ transaction, hideSimulatorFrame, branch
       <p className="my-1 border-t border-dashed border-black"></p>
 
       <div className="space-y-2 mt-2 mb-3 text-black">
-        {transaction.detail.filter(item => !(item.VARIAN === 'Diskon/Promo' || item.HARGA_SATUAN < 0 || item.NAMA_MENU.includes('[PROMO]'))).map((item, index) => (
+        {transaction.detail.filter(item => !(
+          item.VARIAN === 'Diskon/Promo' || 
+          item.HARGA_SATUAN < 0 || 
+          item.NAMA_MENU.includes('[PROMO]') ||
+          item.ID_MENU === 'CHARGE' ||
+          item.ID_VARIAN === 'CHARGE'
+        )).map((item, index) => (
           <div key={index} className="grid grid-cols-12 leading-tight">
-            <span className="col-span-6 font-bold leading-tight pr-1 line-clamp-2">{getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN)}</span>
+            <span className="col-span-6 font-bold leading-tight pr-1 line-clamp-2">
+              {getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN)}
+              {item.PROMO_ID && <span className="ml-1 text-[8px] border border-black px-0.5 font-black">PROMO</span>}
+            </span>
             <span className="col-span-2 text-right">{item.QTY}</span>
             <span className="col-span-4 text-right font-bold">
-              Rp{Number(item.SUBTOTAL || 0).toLocaleString('id-ID')}
+              {item.isCompliment ? 'GRATIS' : `Rp${Number(item.SUBTOTAL || 0).toLocaleString('id-ID')}`}
             </span>
-            <span className="col-span-12 text-[9px] text-black mt-0.5">
-              @ Rp{Number(item.HARGA_SATUAN || 0).toLocaleString('id-ID')}
+            <span className="col-span-12 text-[9px] text-black mt-0.5 flex items-center gap-2">
+              {item.isCompliment ? '@ Rp0 (COMPLIMENT)' : `@ Rp${Number(item.HARGA_SATUAN || 0).toLocaleString('id-ID')}`}
+              {item.ORIGINAL_PRICE && item.ORIGINAL_PRICE > item.HARGA_SATUAN && !item.isCompliment && (
+                <span className="line-through opacity-60 font-normal">Rp{Number(item.ORIGINAL_PRICE).toLocaleString('id-ID')}</span>
+              )}
             </span>
           </div>
         ))}
       </div>
 
       {(() => {
-        const promoItems = transaction.detail.filter(item => (item.VARIAN === 'Diskon/Promo' || item.HARGA_SATUAN < 0 || item.NAMA_MENU.includes('[PROMO]')));
-        const totalDiskon = promoItems.reduce((acc, item) => acc + Math.abs(item.SUBTOTAL), 0);
-        const hasNotes = !!transaction.pesanan?.CATATAN;
-        const hasPromoOrNotes = totalDiskon > 0 || hasNotes;
+        const fullCatatan = transaction.pesanan?.CATATAN || '';
+        const parts = fullCatatan.split('|');
+        
+        // Find promos in detail (for older transactions) or metadata (for newer transactions)
+        const promoItemsFromDetail = transaction.detail.filter(item => 
+          item.ID_MENU === 'PROMO' || item.HARGA_SATUAN < 0 || (item.NAMA_MENU && String(item.NAMA_MENU).includes('[PROMO]'))
+        );
+        const promoItemsFromMeta = transaction.pesanan?.PROMOS || [];
+        
+        // Extract promos from Catatan string if meta is empty
+        const promosFromCatatan: { name: string, subtotal: number }[] = [];
+        if (promoItemsFromMeta.length === 0 && parts.length >= 1 && parts[0].trim() && parts[0].trim() !== 'Promo/Potongan') {
+          const promoStr = parts[0].trim();
+          // Example: "Promo Name (-Rp10.000), Other Promo (-Rp5.000)"
+          const items = promoStr.split(', ');
+          items.forEach(item => {
+            const match = item.match(/(.*) \(-Rp([\d.]+)\)/);
+            if (match) {
+              promosFromCatatan.push({
+                name: match[1],
+                subtotal: -Number(match[2].replace(/\./g, ''))
+              });
+            }
+          });
+        }
 
-        if (!hasPromoOrNotes) return null;
+        const chargesFromDetail = transaction.detail.filter(item => 
+          item.ID_MENU === 'CHARGE' || item.ID_VARIAN === 'CHARGE' || item.NAMA_MENU === 'Parkir'
+        );
+        const chargesFromMeta = transaction.pesanan?.ADDITIONAL_CHARGES || [];
+        
+        // Extract charges from Catatan string if meta is empty
+        const chargesFromCatatan: { name: string, subtotal: number }[] = [];
+        if (chargesFromMeta.length === 0 && parts.length >= 2 && parts[1].trim()) {
+          const chargeStr = parts[1].trim();
+          // Example: "Parkir (Rp2.000), Admin (Rp1.000)"
+          const items = chargeStr.split(', ');
+          items.forEach(item => {
+            const match = item.match(/(.*) \(Rp([\d.]+)\)/);
+            if (match) {
+              chargesFromCatatan.push({
+                name: match[1],
+                subtotal: Number(match[2].replace(/\./g, ''))
+              });
+            }
+          });
+        }
+
+        const hasPromos = promoItemsFromDetail.length > 0 || promoItemsFromMeta.length > 0 || promosFromCatatan.length > 0;
+        const hasCharges = chargesFromDetail.length > 0 || chargesFromMeta.length > 0 || chargesFromCatatan.length > 0;
+        
+        if (!hasPromos && !hasCharges) return null;
 
         return (
-          <>
-            <p className="my-2 border-t border-dashed border-black"></p>
-            {totalDiskon > 0 && (
-              <div className="flex justify-between items-center py-0.5 text-[10px] text-black mb-1.5">
-                <span className="font-bold uppercase tracking-widest text-black">Diskon/Potongan</span>
-                <span className="font-bold text-black">-Rp{totalDiskon.toLocaleString('id-ID')}</span>
+          <div className="mt-2 space-y-2 border-t border-dashed border-black pt-2">
+            {/* Promos from Detail */}
+            {promoItemsFromDetail.map((p, i) => (
+              <div key={`pd-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                <span className="col-span-6 font-bold line-clamp-2">{String(p.NAMA_MENU).replace('[PROMO] ', '')}</span>
+                <span className="col-span-2 text-right">{p.QTY}</span>
+                <span className="col-span-4 text-right font-bold">-Rp{Math.abs(p.SUBTOTAL).toLocaleString('id-ID')}</span>
               </div>
-            )}
-            {hasNotes && (
-              <div className="text-left py-1 text-black text-[10px] leading-relaxed break-words px-1 mb-1.5">
-                <span className="font-bold">Catatan:</span>
-                <p className="mt-1 normal-case text-zinc-850">{transaction.pesanan?.CATATAN}</p>
+            ))}
+            {/* Promos from Meta */}
+            {promoItemsFromMeta.map((p, i) => {
+              const price = p.discountedPrice !== undefined ? p.discountedPrice : p.varian.HARGA;
+              const subtotal = price * p.quantity;
+              return (
+                <div key={`pm-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                  <span className="col-span-6 font-bold line-clamp-2">{p.menu.NAMA_MENU.replace('[PROMO] ', '')}</span>
+                  <span className="col-span-2 text-right">{p.quantity}</span>
+                  <span className="col-span-4 text-right font-bold">-Rp{Math.abs(subtotal).toLocaleString('id-ID')}</span>
+                </div>
+              );
+            })}
+            {/* Promos from Catatan */}
+            {promosFromCatatan.map((p, i) => (
+              <div key={`pc-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                <span className="col-span-6 font-bold line-clamp-2">{p.name}</span>
+                <span className="col-span-2 text-right">1</span>
+                <span className="col-span-4 text-right font-bold">-Rp{Math.abs(p.subtotal).toLocaleString('id-ID')}</span>
               </div>
-            )}
-          </>
+            ))}
+            {/* Charges from Detail */}
+            {chargesFromDetail.map((c, i) => (
+              <div key={`cd-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                <span className="col-span-6 font-bold line-clamp-2">{c.NAMA_MENU}</span>
+                <span className="col-span-2 text-right">{c.QTY}</span>
+                <span className="col-span-4 text-right font-bold">Rp{c.SUBTOTAL.toLocaleString('id-ID')}</span>
+              </div>
+            ))}
+            {/* Charges from Meta */}
+            {chargesFromMeta.map((c, i) => (
+              <div key={`cm-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                <span className="col-span-6 font-bold line-clamp-2">{c.name}</span>
+                <span className="col-span-2 text-right">{c.qty}</span>
+                <span className="col-span-4 text-right font-bold">Rp{(c.price * c.qty).toLocaleString('id-ID')}</span>
+              </div>
+            ))}
+            {/* Charges from Catatan */}
+            {chargesFromCatatan.map((c, i) => (
+              <div key={`cc-${i}`} className="grid grid-cols-12 leading-tight text-[10px] text-black">
+                <span className="col-span-6 font-bold line-clamp-2">{c.name}</span>
+                <span className="col-span-2 text-right">1</span>
+                <span className="col-span-4 text-right font-bold">Rp{c.subtotal.toLocaleString('id-ID')}</span>
+              </div>
+            ))}
+          </div>
         );
       })()}
 
-      <p className="my-2 border-t-2 border-dashed border-black"></p>
+      <p className="mt-1 border-t-2 border-black border-double h-1"></p>
 
-      <div className="flex justify-between items-center py-1">
-        <span className="font-bold text-xs uppercase tracking-widest text-black">Total</span>
-        <span className="font-black text-sm text-black">Rp{total.toLocaleString('id-ID')}</span>
+      <div className="flex justify-between items-center py-1 text-black">
+        <span className="text-sm font-black uppercase tracking-tight">Total</span>
+        <span className="text-sm font-black tracking-tight">Rp{transaction.pesanan?.TOTAL_TAGIHAN.toLocaleString('id-ID')}</span>
       </div>
 
-      {transaction.pesanan?.CATATAN && (
-        <div className="mt-2 pt-2 border-t border-dotted border-black/30">
-          <p className="text-[8px] font-black uppercase text-black mb-0.5">Catatan:</p>
-          <p className="text-[10px] leading-tight text-zinc-900 italic">"{transaction.pesanan.CATATAN}"</p>
-        </div>
-      )}
+      {(() => {
+        const fullCatatan = transaction.pesanan?.CATATAN || '';
+        if (!fullCatatan) return null;
+
+        const parts = fullCatatan.split('|');
+        let userNotePart = '';
+        
+        if (parts.length >= 3) {
+          // New format
+          userNotePart = parts[2].trim();
+        } else if (fullCatatan.includes('|')) {
+          // Partial pipe format, maybe only 1 or 2 parts? 
+          // If there's a pipe, it's likely the new system. 
+          // If the 3rd part is missing, it means there's no note.
+          userNotePart = ''; 
+        } else {
+          // Old plain format
+          userNotePart = fullCatatan.trim();
+        }
+
+        if (!userNotePart) return null;
+
+        return (
+          <div className="mt-2 pt-2 border-t border-dotted border-black/30">
+            <div className="text-left">
+              <p className="text-[8px] font-black uppercase text-black mb-0.5">Catatan:</p>
+              <p className="text-[10px] leading-tight text-zinc-900 italic font-medium">"{userNotePart}"</p>
+            </div>
+          </div>
+        );
+      })()}
 
       <p className="my-3 border-t border-dashed border-black"></p>
 

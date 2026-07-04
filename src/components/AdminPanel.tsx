@@ -1,9 +1,12 @@
+import { getWITAString } from "../utils/date";
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Building, 
   UtensilsCrossed, 
   Tag, 
+  ShoppingBag,
+  Calendar,
   Layers, 
   Plus,
   X,
@@ -30,7 +33,8 @@ import {
   Users,
   ClipboardList,
   FileImage,
-  ImageOff
+  ImageOff,
+  Database
 } from 'lucide-react';
 import { getMasterData, saveMasterData, syncMasterDataFromGAS, postUniversalDataToGAS, fetchUniversalDataFromGAS, uploadBukuKasFotoToGAS } from '../utils/db';
 import { CustomSelect } from './CustomSelect';
@@ -331,6 +335,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   const [bukuKasList, setBukuKasList] = useState<any[]>([]);
   const [inventarisData, setInventarisData] = useState<any[]>([]);
   const [shiftData, setShiftData] = useState<any[]>([]);
+  const [isLoadingPanel, setIsLoadingPanel] = useState(false);
   const [isUniversalLoading, setIsUniversalLoading] = useState(false);
 
   // Back button interception for Android
@@ -338,6 +343,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   const [formData, setFormData] = useState<any>({ STATUS: 'Tersedia' });
   const [showKeteranganSuggestions, setShowKeteranganSuggestions] = useState(false);
   const [promoVariantSearch, setPromoVariantSearch] = useState('');
+  const [promoBranchSearch, setPromoBranchSearch] = useState('');
+  const [isAllVariantsSelected, setIsAllVariantsSelected] = useState(false);
 
   const getVariantDisplayLabel = (variantId: string): string => {
     const v = master?.varian?.find(x => String(x.ID_VARIAN) === String(variantId));
@@ -547,7 +554,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   };
 
   const formatToDatetimeLocal = (dateInput: any) => {
-    if (!dateInput) return new Date().toISOString().substring(0, 16);
+    if (!dateInput) return getWITAString().substring(0, 16);
     let d: Date;
     if (dateInput instanceof Date) {
       d = dateInput;
@@ -575,11 +582,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       }
     }
     if (isNaN(d.getTime())) {
-      return new Date().toISOString().substring(0, 16);
+      return getWITAString().substring(0, 16);
     }
-    const tzOffset = d.getTimezoneOffset() * 60000;
-    const localTime = new Date(d.getTime() - tzOffset);
-    return localTime.toISOString().substring(0, 16);
+    return getWITAString(d).substring(0, 16);
   };
 
   // CLIENT-SIDE SEQUENCE AUTO-INCREMENT GENERATOR FOR PERFECT SYNCHRONICITY
@@ -691,7 +696,11 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       const tipe = formData.TIPE;
       const targetItem = formData.TARGET_ITEM;
       const nilai = Number(formData.NILAI_PROMO || 0);
-      return !!String(nama).trim() && !!tipe && !!String(targetItem).trim() && nilai > 0;
+      const jenisPromo = formData.JENIS_PROMO || 'PER_MENU';
+      
+      const isTargetValid = jenisPromo === 'PER_PESANAN' ? true : !!String(targetItem || '').trim();
+      
+      return !!String(nama || '').trim() && !!tipe && isTargetValid && nilai > 0;
     }
 
     if (showModal === 'pegawai') {
@@ -727,7 +736,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
     } else if (showModal === 'varian') {
       keysToCheck = ['ID_KATEGORI', 'ID_MENU', 'NAMA_VARIAN', 'HARGA', 'STATUS'];
     } else if (showModal === 'promo') {
-      keysToCheck = ['NAMA_PROMO', 'TIPE', 'TARGET_ITEM', 'SYARAT_QTY', 'NILAI_PROMO'];
+      keysToCheck = ['NAMA_PROMO', 'TIPE', 'TARGET_ITEM', 'SYARAT_QTY', 'NILAI_PROMO', 'JENIS_PROMO', 'ID_CABANG', 'PERIODE'];
     } else if (showModal === 'pegawai') {
       keysToCheck = ['ID_PEGAWAI', 'ID_CABANG', 'NAMA_PEGAWAI', 'KONTAK'];
     }
@@ -799,6 +808,8 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       }
     } catch (e) {
       console.log('Error reading cached buku kas/inventaris/shift:', e);
+    } finally {
+      setIsLoadingPanel(false);
     }
   };
 
@@ -1086,6 +1097,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
   };
 
   const openModule = async (id: TabType) => {
+    setIsLoadingPanel(true);
     window.scrollTo({ top: 0 });
     setSearchQuery('');
     setIsSearchActive(false);
@@ -1159,6 +1171,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       console.warn("Error fetching data for module:", id, e);
     } finally {
       setIsUniversalLoading(false);
+      setIsLoadingPanel(false);
     }
   };
 
@@ -1183,7 +1196,16 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
       initialData = { STATUS: 'Tersedia', ID_KATEGORI: defaultKategoriId, ID_MENU: defaultMenuId };
     } else if (tab === 'promo') {
       const defaultPromoId = generateClientIdForModule('promo');
-      initialData = { ID_PROMO: defaultPromoId, NAMA_PROMO: '', TIPE: 'DISKON_PERSEN', TARGET_ITEM: '', SYARAT_QTY: 1, NILAI_PROMO: 0 };
+      initialData = { 
+        ID_PROMO: defaultPromoId, 
+        NAMA_PROMO: '', 
+        JENIS_PROMO: 'PER_MENU',
+        TIPE: 'DISKON_PERSEN', 
+        TARGET_ITEM: '', 
+        SYARAT_QTY: 1, 
+        NILAI_PROMO: 0,
+        ID_CABANG: 'ALL'
+      };
     } else {
       initialData = {};
     }
@@ -1232,6 +1254,9 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           finalFormData.ID_IZIN = generateClientIdForModule('shift');
         } else if (showModal === 'pegawai') {
           finalFormData.ID_PEGAWAI = generateClientIdForModule('pegawai');
+        } else if (showModal === 'promo') {
+          finalFormData.ID_PROMO = generateClientIdForModule('promo');
+          finalFormData.JENIS_PROMO = finalFormData.JENIS_PROMO || 'PER_MENU';
         }
       }
 
@@ -1290,7 +1315,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
         }
 
         const payload = {
-          TANGGAL: finalFormData.tanggal || finalFormData.TANGGAL || new Date().toISOString(),
+          TANGGAL: finalFormData.tanggal || finalFormData.TANGGAL || getWITAString(),
           ID_CABANG: finalFormData.cabang || finalFormData.CABANG || finalFormData.ID_CABANG || defaultCabId,
           CABANG: finalFormData.cabang || finalFormData.CABANG || finalFormData.ID_CABANG || defaultCabId,
           JENIS_TRANSAKSI: cleanJenis,
@@ -1407,7 +1432,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           ...finalFormData, 
           CABANG: finalFormData.CABANG || finalFormData.cabang || finalFormData.ID_CABANG || defaultCabId,
           cabang: finalFormData.cabang || finalFormData.CABANG || finalFormData.ID_CABANG || defaultCabId,
-          TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || new Date().toISOString() 
+          TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || getWITAString() 
         };
         
         try {
@@ -1434,7 +1459,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
           ...finalFormData, 
           CABANG: finalFormData.CABANG || finalFormData.cabang || finalFormData.ID_CABANG || defaultCabId,
           cabang: finalFormData.cabang || finalFormData.CABANG || finalFormData.ID_CABANG || defaultCabId,
-          TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || new Date().toISOString() 
+          TANGGAL: finalFormData.TANGGAL || finalFormData.tanggal || getWITAString() 
         };
         
         try {
@@ -1883,6 +1908,21 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
 
   return (
     <SelectionContext.Provider value={{ selectedIds, isSelectionMode, toggleSelection, handleEditItem, getItemId }}>
+      {isLoadingPanel && (
+        <div style={{ zIndex: 1000001 }} className="fixed inset-0 bg-white/60 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
+           <div className="flex flex-col items-center gap-4">
+              <div className="relative h-16 w-16">
+                 <div className="absolute inset-0 rounded-full border-4 border-red-100"></div>
+                 <div className="absolute inset-0 rounded-full border-4 border-red-600 border-t-transparent animate-spin"></div>
+                 <Loader className="absolute inset-0 m-auto h-6 w-6 text-red-600 animate-pulse" />
+              </div>
+              <div className="text-center space-y-1">
+                 <p className="text-sm font-black text-zinc-900 uppercase tracking-widest animate-pulse">Menyiapkan Panel Admin</p>
+                 <p className="text-[10px] text-zinc-500 font-medium">Sinkronisasi data dengan sistem pusat...</p>
+              </div>
+           </div>
+        </div>
+      )}
       <div 
         className="space-y-6 text-left pb-24 relative max-w-full overflow-x-hidden"
         onTouchStart={handleTouchStart} 
@@ -2296,33 +2336,57 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                     </div>
                   ) : (
                     <div className="grid gap-3.5">
-                      {filteredPromo.map((p, i) => (
-                        <SelectableCard key={i} item={p}>
-                          <div className="h-11 w-11 rounded-full bg-rose-50 text-rose-700 flex items-center justify-center shrink-0">
-                            <Tag className="h-5.5 w-5.5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <h5 className="text-[13px] font-black text-zinc-900 truncate tracking-tight leading-none text-left">
-                                {p.NAMA_PROMO}
-                              </h5>
+                      {filteredPromo.map((p, i) => {
+                        const startDateStr = p.PERIODE ? p.PERIODE.split(' - ')[0] : '-';
+                        const endDateStr = p.PERIODE ? p.PERIODE.split(' - ')[1] : '-';
+                        
+                        return (
+                          <SelectableCard key={i} item={p}>
+                            <div className="h-12 w-12 rounded-2xl bg-rose-50 text-rose-700 flex items-center justify-center shrink-0 shadow-sm border border-rose-100">
+                              <Tag className="h-6 w-6" />
                             </div>
-                            <div className="flex items-center justify-between mt-1.5">
-                              <div className="text-[11px] text-zinc-550 font-semibold truncate flex flex-col gap-1 items-start min-w-0">
-                                <span className="truncate"><b>Tipe:</b> {p.TIPE === 'DISKON_PERSEN' ? 'Diskon Persentase %' : 'Paket Harga Tetap'}</span>
-                                <span className="truncate"><b>Syarat Qty:</b> {p.SYARAT_QTY} item</span>
-                                <span className="font-medium text-zinc-450 mt-1 flex gap-1 items-baseline flex-wrap">
-                                  <b className="text-zinc-500 font-extrabold shrink-0">Varian:</b> 
-                                  <span className="font-bold underline text-red-650">{p.TARGET_ITEM ? p.TARGET_ITEM.split('|').map(getVariantDisplayLabel).join(', ') : '-'}</span>
-                                </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <h5 className="text-sm font-black text-zinc-900 truncate tracking-tight leading-none text-left flex items-center gap-2">
+                                    {p.NAMA_PROMO}
+                                    {p.JENIS_PROMO === 'PER_PESANAN' && (
+                                      <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 text-[9px] font-black uppercase tracking-wider border border-blue-100">Pesanan</span>
+                                    )}
+                                  </h5>
+                                  <div className="flex flex-col gap-1 mt-2">
+                                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-bold">
+                                      <Calendar className="h-3 w-3 text-zinc-400" />
+                                      <span>{startDateStr} s/d {endDateStr}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-bold">
+                                      <ShoppingBag className="h-3 w-3 text-zinc-400" />
+                                      <span>Min. {p.SYARAT_QTY} item</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <div className="text-base sm:text-lg font-black text-rose-650 leading-none">
+                                    {p.TIPE === 'DISKON_PERSEN' ? `${p.NILAI_PROMO}%` : `-Rp${Number(p.NILAI_PROMO).toLocaleString('id-ID')}`}
+                                  </div>
+                                  <div className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mt-1">
+                                    {p.TIPE === 'DISKON_PERSEN' ? 'Diskon Persen' : 'Potongan Harga'}
+                                  </div>
+                                </div>
                               </div>
-                              <span className="text-xs sm:text-sm font-black text-rose-750 self-end shrink-0 ml-2">
-                                {p.TIPE === 'DISKON_PERSEN' ? `${p.NILAI_PROMO}%` : `Rp${Number(p.NILAI_PROMO).toLocaleString('id-ID')}`}
-                              </span>
+                              
+                              {p.JENIS_PROMO === 'PER_MENU' && (
+                                <div className="mt-3 pt-3 border-t border-zinc-50 flex gap-1.5 items-baseline flex-wrap">
+                                  <span className="text-[10px] font-black text-zinc-400 uppercase shrink-0">Target:</span>
+                                  <span className="text-[10px] font-bold text-zinc-600 line-clamp-1">
+                                    {p.TARGET_ITEM ? String(p.TARGET_ITEM).split('|').map(getVariantDisplayLabel).join(', ') : '-'}
+                                  </span>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        </SelectableCard>
-                      ))}
+                          </SelectableCard>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2722,7 +2786,7 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                       <div>
                         <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1.5">Tanggal Entri</label>
                         <input type="date"
-                          max={new Date().toISOString().split('T')[0]}
+                          max={getWITAString().split('T')[0]}
                           value={formData.tanggal ? formData.tanggal.split('T')[0] : (formData.TANGGAL ? formData.TANGGAL.split('T')[0] : '')} required className="w-full text-sm font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 outline-none focus:border-zinc-400 focus:bg-white transition-all"
                           onChange={e => setFormData({...formData, tanggal: e.target.value, TANGGAL: e.target.value})} />
                       </div>
@@ -3156,72 +3220,381 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                 {/* MASTER PROMO FORM */}
                 {showModal === 'promo' && (
                   <>
-
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Promo</label>
-                      <input 
-                        type="text" 
-                        placeholder="Promo Pembelian Pizza" 
-                        value={formData.NAMA_PROMO || ''} 
-                        required 
-                        className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
-                        onChange={e => setFormData({...formData, NAMA_PROMO: e.target.value})}
-                      />
-                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tipe Promo</label>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">ID Promo (Otomatis)</label>
+                        <input 
+                          type="text" 
+                          value={formData.ID_PROMO || ''} 
+                          disabled 
+                          className="w-full p-3 rounded-xl bg-zinc-100 border border-zinc-200 text-sm font-bold text-zinc-500 outline-none" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Nama Promo</label>
+                        <input 
+                          type="text" 
+                          placeholder="Contoh: Promo Gajian" 
+                          value={formData.NAMA_PROMO || ''} 
+                          required 
+                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                          onChange={e => setFormData({...formData, NAMA_PROMO: e.target.value})}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Jenis Promo</label>
+                        <CustomSelect 
+                          required 
+                          className="w-full"
+                          textSizeClass="text-sm"
+                          value={formData.JENIS_PROMO || 'PER_MENU'} 
+                          onChange={(val) => setFormData({...formData, JENIS_PROMO: val})}
+                          placeholder="-- Pilih Jenis Promo --"
+                          options={[
+                            { value: 'PER_MENU', label: 'Promo Per Menu' },
+                            { value: 'PER_PESANAN', label: 'Promo Per Pesanan' }
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Tipe Nilai</label>
                         <CustomSelect 
                           required 
                           className="w-full"
                           textSizeClass="text-sm"
                           value={formData.TIPE || 'DISKON_PERSEN'} 
                           onChange={(val) => setFormData({...formData, TIPE: val})}
-                          placeholder="-- Pilih Tipe Promo --"
-                          options={[{ value: 'DISKON_PERSEN', label: 'Diskon Persentase (%)' }, { value: 'HARGA_FIX', label: 'Harga Tetap Paket (Rupiah)' }]}
+                          placeholder="-- Pilih Tipe --"
+                          options={[
+                            { value: 'DISKON_PERSEN', label: 'Diskon Persen (%)' },
+                            { value: 'DISKON_NOMINAL', label: 'Diskon Nominal (Rp)' },
+                            { value: 'HARGA_FIX', label: 'Harga Tetap (Rp)' }
+                          ]}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Syarat Qty Min</label>
+                        <input 
+                          type="text" 
+                          inputMode="numeric"
+                          placeholder="0" 
+                          value={formData.SYARAT_QTY === 0 ? '' : formData.SYARAT_QTY} 
+                          required 
+                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, '');
+                            setFormData({...formData, SYARAT_QTY: val === '' ? 0 : parseInt(val)});
+                          }}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Syarat Qty Minimal</label>
-                        <input 
-                          type="number" 
-                          min="1" 
-                          placeholder="2" 
-                          value={formData.SYARAT_QTY || ''} 
-                          required 
-                          className="w-full p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none" 
-                          onChange={e => setFormData({...formData, SYARAT_QTY: parseInt(e.target.value) || 0})}
-                        />
+                        <label className="block text-[10px] font-black uppercase text-zinc-550 mb-1">
+                          {formData.TIPE === 'DISKON_PERSEN' ? 'Nilai Diskon (%)' : 'Nilai (Rupiah)'}
+                        </label>
+                        <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
+                          {formData.TIPE !== 'DISKON_PERSEN' && (
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                              <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
+                            </div>
+                          )}
+                          <input 
+                            type="number" 
+                            min="1" 
+                            placeholder="0" 
+                            value={formData.NILAI_PROMO || ''} 
+                            required 
+                            className={`w-full ${formData.TIPE !== 'DISKON_PERSEN' ? 'pl-9' : 'pl-3'} pr-8 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none`} 
+                            onChange={e => setFormData({...formData, NILAI_PROMO: parseFloat(e.target.value) || 0})}
+                          />
+                          {formData.TIPE === 'DISKON_PERSEN' && (
+                            <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                              <span className="text-zinc-500 font-extrabold text-sm">%</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
+
                     <div>
-                      <label className="block text-[10px] font-black uppercase text-zinc-550 mb-1">
-                        {formData.TIPE === 'HARGA_FIX' ? 'Nilai Harga Tetap (Rupiah)' : 'Nilai Persentase Diskon (%)'}
-                      </label>
-                      <div className="relative rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden focus-within:border-zinc-400 focus-within:bg-white transition-all">
-                        {formData.TIPE === 'HARGA_FIX' && (
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <span className="text-zinc-400 font-extrabold text-sm">Rp</span>
-                          </div>
-                        )}
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Pilih Cabang (Berlaku Di)</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Building className="h-4 w-4 text-zinc-400" />
+                        </div>
                         <input 
-                          type="number" 
-                          min="1" 
-                          placeholder={formData.TIPE === 'HARGA_FIX' ? '15000' : '10'} 
-                          value={formData.NILAI_PROMO || ''} 
-                          required 
-                          className={`w-full ${formData.TIPE === 'HARGA_FIX' ? 'pl-9' : 'pl-3'} pr-8 py-3 bg-transparent text-sm font-bold text-zinc-900 outline-none`} 
-                          onChange={e => setFormData({...formData, NILAI_PROMO: parseFloat(e.target.value) || 0})}
+                          type="text" 
+                          placeholder="Cari Cabang..." 
+                          value={promoBranchSearch} 
+                          className="w-full pl-9 pr-3 py-3 rounded-xl bg-zinc-50 border border-zinc-200 text-sm font-bold focus:bg-white transition-all outline-none"
+                          onChange={e => setPromoBranchSearch(e.target.value)}
                         />
-                        {formData.TIPE !== 'HARGA_FIX' && (
-                          <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                            <span className="text-zinc-500 font-extrabold text-sm">%</span>
+                        
+                        {promoBranchSearch.trim() && (
+                          <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg z-50">
+                            <div 
+                              className="p-3 text-xs font-bold text-zinc-800 hover:bg-neutral-50 cursor-pointer flex justify-between items-center border-b border-zinc-100"
+                              onClick={() => {
+                                setFormData({ ...formData, ID_CABANG: 'ALL' });
+                                setPromoBranchSearch('');
+                              }}
+                            >
+                              <span>SEMUA CABANG</span>
+                              <Plus className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                            </div>
+                            {(master?.cabang || []).filter(c => c.NAMA_CABANG.toLowerCase().includes(promoBranchSearch.toLowerCase())).map(cab => (
+                              <div 
+                                key={cab.ID_CABANG}
+                                className="p-3 text-xs font-bold text-zinc-800 hover:bg-neutral-50 cursor-pointer flex justify-between items-center border-b border-zinc-100 last:border-0"
+                                onClick={() => {
+                                  const current = formData.ID_CABANG === 'ALL' ? [] : (formData.ID_CABANG ? String(formData.ID_CABANG).split('|').filter(Boolean) : []);
+                                  if (!current.includes(cab.ID_CABANG)) {
+                                    const next = [...current, cab.ID_CABANG].join('|');
+                                    setFormData({ ...formData, ID_CABANG: next });
+                                  }
+                                  setPromoBranchSearch('');
+                                }}
+                              >
+                                <span>{cab.NAMA_CABANG}</span>
+                                <Plus className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {formData.ID_CABANG === 'ALL' ? (
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full text-xs font-bold text-white transition">
+                            <span>SEMUA CABANG</span>
+                            <button type="button" onClick={() => setFormData({...formData, ID_CABANG: ''})} className="p-0.5 rounded-full hover:bg-zinc-700 transition cursor-pointer">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          formData.ID_CABANG ? String(formData.ID_CABANG).split('|').filter(Boolean).map(id => (
+                            <div key={id} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-100 border border-neutral-200 hover:bg-neutral-200 rounded-full text-xs font-bold text-zinc-800 transition">
+                              <span>{getCabangName(id)}</span>
+                              <button type="button" onClick={() => {
+                                const next = String(formData.ID_CABANG).split('|').filter(x => x !== id).join('|');
+                                setFormData({...formData, ID_CABANG: next});
+                              }} className="p-0.5 rounded-full hover:bg-neutral-200 transition cursor-pointer">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )) : (
+                            <p className="text-[10px] font-bold text-zinc-400 italic">Belum ada cabang terpilih.</p>
+                          )
+                        )}
+                      </div>
                     </div>
+
                     <div>
-                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Pilih Varian Terkait (Nama Menu (Varian))</label>
+                      <label className="block text-[10px] font-black uppercase text-zinc-500 mb-1">Jenis Periode Promo</label>
+                      <CustomSelect 
+                        required 
+                        className="w-full"
+                        textSizeClass="text-sm"
+                        value={formData.JENIS_PERIODE || 'HARIAN'} 
+                        onChange={(val) => {
+                          let periode = '';
+                          const today = getWITAString().split('T')[0];
+                          if (val === 'JAM') {
+                            periode = `${today} 00:00 - ${today} 23:59`;
+                          } else if (val === 'HARIAN') {
+                            periode = `${today} 00:00 - ${today} 23:59`;
+                          }
+                          setFormData({...formData, JENIS_PERIODE: val, PERIODE: periode});
+                        }}
+                        placeholder="-- Pilih Jenis Periode --"
+                        options={[
+                          { value: 'JAM', label: 'Berdasarkan Jam (Hari Ini)' },
+                          { value: 'HARIAN', label: 'Harian (Hari Ini)' },
+                          { value: 'TANGGAL', label: 'Tanggal Tertentu' },
+                          { value: 'RENTANG', label: 'Rentang Bulan' }
+                        ]}
+                      />
+                    </div>
+
+                    {formData.JENIS_PERIODE === 'JAM' && (
+                      <div className="grid grid-cols-2 gap-3 p-4 bg-zinc-50 border border-zinc-200 rounded-xl">
+                        <div className="col-span-2 text-[10px] font-bold text-zinc-400 mb-1">Berlaku khusus HARI INI:</div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Jam Mulai</label>
+                          <input 
+                            type="time" 
+                            required
+                            value={(String(formData.PERIODE || '')).split(' - ')[0]?.split(' ')[1] || ''}
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const today = getWITAString().split('T')[0];
+                              const currentEnd = (String(formData.PERIODE || '')).split(' - ')[1] || '23:59';
+                              setFormData({...formData, PERIODE: `${today} ${e.target.value} - ${currentEnd}`});
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Jam Berakhir</label>
+                          <input 
+                            type="time" 
+                            required
+                            value={(String(formData.PERIODE || '')).split(' - ')[1]?.split(' ')[1] || ''}
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const today = getWITAString().split('T')[0];
+                              const currentStart = (String(formData.PERIODE || '')).split(' - ')[0] || `${today} 00:00`;
+                              setFormData({...formData, PERIODE: `${currentStart} - ${today} ${e.target.value}`});
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {formData.JENIS_PERIODE === 'TANGGAL' && (
+                      <div className="grid grid-cols-2 gap-3 p-4 bg-zinc-50 border border-zinc-200 rounded-xl">
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Tanggal & Jam Mulai</label>
+                          <input 
+                            type="datetime-local" 
+                            required
+                            value={(String(formData.PERIODE || '')).split(' - ')[0]?.replace(' ', 'T') || ''}
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const val = e.target.value.replace('T', ' ');
+                              const currentEnd = (String(formData.PERIODE || '')).split(' - ')[1] || '';
+                              setFormData({...formData, PERIODE: `${val} - ${currentEnd}`});
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Tanggal & Jam Selesai</label>
+                          <input 
+                            type="datetime-local" 
+                            required
+                            value={(String(formData.PERIODE || '')).split(' - ')[1]?.replace(' ', 'T') || ''}
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const val = e.target.value.replace('T', ' ');
+                              const currentStart = (String(formData.PERIODE || '')).split(' - ')[0] || '';
+                              setFormData({...formData, PERIODE: `${currentStart} - ${val}`});
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {formData.JENIS_PERIODE === 'RENTANG' && (
+                      <div className="grid grid-cols-2 gap-3 p-4 bg-zinc-50 border border-zinc-200 rounded-xl">
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Bulan Mulai</label>
+                          <select 
+                            required
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const monthIdx = parseInt(e.target.value);
+                              const year = new Date().getFullYear();
+                              const dateStart = new Date(year, monthIdx, 1);
+                              const formattedStart = `${dateStart.getFullYear()}-${String(dateStart.getMonth()+1).padStart(2,'0')}-01 00:00`;
+                              const currentEnd = (String(formData.PERIODE || '')).split(' - ')[1] || '';
+                              setFormData({...formData, PERIODE: `${formattedStart} - ${currentEnd}`});
+                            }}
+                          >
+                            <option value="">Pilih Bulan</option>
+                            {['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map((m, i) => (
+                              <option key={i} value={i}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-zinc-500 mb-1">Bulan Akhir</label>
+                          <select 
+                            required
+                            className="w-full p-2.5 rounded-lg bg-white border border-zinc-200 text-xs font-bold outline-none"
+                            onChange={(e) => {
+                              const monthIdx = parseInt(e.target.value);
+                              const year = new Date().getFullYear();
+                              const dateEnd = new Date(year, monthIdx + 1, 0); // last day of month
+                              const formattedEnd = `${dateEnd.getFullYear()}-${String(dateEnd.getMonth()+1).padStart(2,'0')}-${String(dateEnd.getDate()).padStart(2,'0')} 23:59`;
+                              const currentStart = (String(formData.PERIODE || '')).split(' - ')[0] || '';
+                              setFormData({...formData, PERIODE: `${currentStart} - ${formattedEnd}`});
+                            }}
+                          >
+                            <option value="">Pilih Bulan</option>
+                            {['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map((m, i) => (
+                              <option key={i} value={i}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-3 bg-zinc-100 border border-zinc-200 rounded-xl">
+                      <p className="text-[10px] font-black text-zinc-500 uppercase mb-1">Ringkasan Periode Terpilih:</p>
+                      <p className="text-xs font-bold text-zinc-900">{formData.PERIODE || 'Belum diatur'}</p>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-end mb-1">
+                        <label className="block text-[10px] font-black uppercase text-zinc-500">
+                          Pilih Item Target (Menu/Varian) {formData.JENIS_PROMO === 'PER_PESANAN' && '(Opsional)'}
+                        </label>
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            const hasAnyTarget = !!(formData.TARGET_ITEM && String(formData.TARGET_ITEM).trim());
+                            if (hasAnyTarget) {
+                              setFormData({ ...formData, TARGET_ITEM: '' });
+                            } else {
+                              const allIds = (master?.varian || []).map(v => String(v.ID_VARIAN)).join('|');
+                              setFormData({ ...formData, TARGET_ITEM: allIds });
+                            }
+                          }}
+                          className="text-[10px] font-black text-red-650 uppercase hover:text-red-800 transition px-2 py-1 rounded-md bg-red-50 border border-red-100"
+                        >
+                          {!!(formData.TARGET_ITEM && String(formData.TARGET_ITEM).trim()) ? 'Hapus Semua' : 'Pilih Semua Item'}
+                        </button>
+                      </div>
+
+                      <div className="mb-3 flex flex-wrap gap-1.5">
+                        <span className="text-[9px] font-black text-zinc-400 uppercase w-full mb-0.5">Filter Kategori:</span>
+                        {master?.kategori?.map(kat => {
+                          const variantsInKat = (master?.varian || []).filter(v => v.ID_KATEGORI === kat.ID_KATEGORI);
+                          const variantIdsInKat = variantsInKat.map(v => v.ID_VARIAN);
+                          const currentTargets = formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean) : [];
+                          const isAllInKatSelected = variantIdsInKat.length > 0 && variantIdsInKat.every(id => currentTargets.includes(id));
+                          
+                          return (
+                            <button
+                              key={kat.ID_KATEGORI}
+                              type="button"
+                              onClick={() => {
+                                const current = formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean) : [];
+                                let next;
+                                if (isAllInKatSelected) {
+                                  // Remove all from this category
+                                  next = current.filter(id => !variantIdsInKat.includes(id));
+                                } else {
+                                  // Add all from this category (avoid duplicates)
+                                  const toAdd = variantIdsInKat.filter(id => !current.includes(id));
+                                  next = [...current, ...toAdd];
+                                }
+                                setFormData({ ...formData, TARGET_ITEM: next.join('|') });
+                              }}
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all border ${
+                                isAllInKatSelected 
+                                  ? 'bg-zinc-800 text-white border-zinc-800' 
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-400'
+                              }`}
+                            >
+                              {kat.NAMA_KATEGORI}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <div className="relative">
                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                           <Search className="h-4 w-4 text-zinc-400" />
@@ -3234,29 +3607,21 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                           onChange={e => setPromoVariantSearch(e.target.value)}
                         />
                         
-                        {/* Dropdown Options matching "Nama Menu (Varian)" */}
-                        {((master?.varian || []).map(v => {
-                          const m = master?.menu?.find(x => String(x.ID_MENU) === String(v.ID_MENU));
-                          const label = m ? `${m.NAMA_MENU} (${v.NAMA_VARIAN})` : v.NAMA_VARIAN;
-                          return { id: v.ID_VARIAN, label };
-                        }).filter(item => {
-                          if (!promoVariantSearch.trim()) return false;
-                          return item.label.toLowerCase().includes(promoVariantSearch.toLowerCase());
-                        })).length > 0 && (
+                        {promoVariantSearch.trim() && (
                           <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg z-50">
                             {((master?.varian || []).map(v => {
                               const m = master?.menu?.find(x => String(x.ID_MENU) === String(v.ID_MENU));
                               const label = m ? `${m.NAMA_MENU} (${v.NAMA_VARIAN})` : v.NAMA_VARIAN;
-                              return { id: v.ID_VARIAN, label };
+                              return { id: String(v.ID_VARIAN), label };
                             }).filter(item => {
-                              if (!promoVariantSearch.trim()) return false;
-                              return item.label.toLowerCase().includes(promoVariantSearch.toLowerCase());
+                              const currentTargets = formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean) : [];
+                              return item.label.toLowerCase().includes(promoVariantSearch.toLowerCase()) && !currentTargets.includes(item.id);
                             })).map(item => (
                               <div 
                                 key={item.id}
                                 className="p-3 text-xs font-bold text-zinc-800 hover:bg-neutral-50 cursor-pointer flex justify-between items-center border-b border-zinc-100 last:border-0"
                                 onClick={() => {
-                                  const currentTargets = formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean) : [];
+                                  const currentTargets = formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean) : [];
                                   if (!currentTargets.includes(item.id)) {
                                     const newTargets = [...currentTargets, item.id].join('|');
                                     setFormData({ ...formData, TARGET_ITEM: newTargets });
@@ -3272,17 +3637,17 @@ export default function AdminPanel({ onRefreshPOSCatalog, onModuleActiveChange, 
                         )}
                       </div>
 
-                      {/* Variants Selected Chips */}
                       <div className="flex flex-wrap gap-2 mt-2">
-                        {formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean).map(id => (
+                        {formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean).map(id => (
                           <div key={id} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-100 border border-neutral-200 hover:bg-neutral-200 rounded-full text-xs font-bold text-zinc-800 transition">
                             <span>{getVariantDisplayLabel(id)}</span>
                             <button 
                               type="button"
                               onClick={() => {
-                                const currentTargets = formData.TARGET_ITEM ? formData.TARGET_ITEM.split('|').filter(Boolean) : [];
+                                const currentTargets = formData.TARGET_ITEM ? String(formData.TARGET_ITEM).split('|').filter(Boolean) : [];
                                 const newTargets = currentTargets.filter(item => item !== id).join('|');
                                 setFormData({ ...formData, TARGET_ITEM: newTargets });
+                                setIsAllVariantsSelected(false);
                               }}
                               className="p-0.5 rounded-full hover:bg-neutral-200 text-zinc-555 hover:text-zinc-850 transition cursor-pointer"
                             >

@@ -1,3 +1,20 @@
+
+declare global {
+  interface Window {
+    bluetoothSerial: any;
+  }
+  interface Navigator {
+    bluetooth: any;
+  }
+}
+
+interface BluetoothDevice {
+  id: string;
+  name?: string;
+  gatt?: any;
+}
+
+import { formatToIDDateTime } from "./date";
 // @ts-nocheck
 import ReceiptPrinterEncoder from 'thermal-printer-encoder';
 import { Transaction } from '../types';
@@ -135,9 +152,11 @@ export const connectThermalPrinter = (): Promise<any> => {
 };
 
 export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Transaction, cabangName: string) => {
-  const masterData = await getMasterData().catch(() => null);
-  const branchObj = masterData?.cabang?.find((c: any) => String(c.ID_CABANG) === String(tx.cabang));
-  const finalBranchLocation = branchObj?.LOKASI || 'Jl. R Suprapto, Taman Sari, Mataram';
+  const branchName = tx.cabang || tx.pesanan?.ID_CABANG || cabangName || 'MATARAM';
+  const isPraya = branchName === 'PRAYA' || tx.pesanan?.ID_CABANG === '1';
+  const finalBranchLocation = isPraya 
+    ? "Jl. Raya Praya Mantang, Ujan Rintis, Praya"
+    : "Jl. R Suprapto, Taman Sari, Mataram";
 
   // Use thermal-printer-encoder to generate exactly matching bytes as the PDF
   const encoder = new ReceiptPrinterEncoder({
@@ -164,9 +183,11 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .text(line)
     .newline()
     .align('left')
-    .text(`No.   : ${tx.id}`)
+    .text(`No.     : ${tx.id}`)
     .newline()
-    .text(`Tgl.  : ${new Date(tx.timestamp).toLocaleString('id-ID')}`)
+    .text(`Tgl.    : ${formatToIDDateTime(tx.timestamp)}`)
+    .newline()
+    .text(`Cabang  : ${branchName}`)
     .newline();
 
   if (tx.pesanan?.JENIS_PESANAN === 'Compliment') {
@@ -191,21 +212,134 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .newline()
     .align('left');
 
+  const promos: any[] = [];
+  const charges: any[] = [];
+  const normalItems: any[] = [];
+
   if (tx.detail) {
     tx.detail.forEach((item: any) => {
-      const menuName = getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN);
-      
-      receipt.bold(true)
-        .text(menuName)
-        .bold(false)
-        .newline()
-        // Create padding between QTY and SUBTOTAL
-        .text(`${item.QTY}`)
-        .text(`                Rp${item.SUBTOTAL.toLocaleString('id-ID')}`.slice(-20))
-        .newline()
-        .text(`@ Rp${item.HARGA_SATUAN.toLocaleString('id-ID')}`)
-        .newline();
+      if (item.ID_MENU === 'PROMO' || item.HARGA_SATUAN < 0 || String(item.NAMA_MENU).includes('[PROMO]')) {
+        promos.push({
+          name: item.NAMA_MENU,
+          subtotal: item.SUBTOTAL
+        });
+      } else if (item.ID_MENU === 'CHARGE' || item.ID_VARIAN === 'CHARGE') {
+        charges.push({
+          name: item.NAMA_MENU,
+          subtotal: item.SUBTOTAL
+        });
+      } else {
+        normalItems.push(item);
+      }
     });
+  }
+
+  // Add from metadata if detail didn't contain them (for new transactions)
+  if (tx.pesanan?.ADDITIONAL_CHARGES && charges.length === 0) {
+    tx.pesanan.ADDITIONAL_CHARGES.forEach(c => {
+      charges.push({
+        name: c.name,
+        subtotal: c.price * c.qty,
+        qty: c.qty
+      });
+    });
+  }
+
+  if (tx.pesanan?.PROMOS && promos.length === 0) {
+    tx.pesanan.PROMOS.forEach(p => {
+      const price = p.discountedPrice !== undefined ? p.discountedPrice : p.varian.HARGA;
+      promos.push({
+        name: p.menu.NAMA_MENU,
+        subtotal: price * p.quantity,
+        qty: p.quantity
+      });
+    });
+  }
+
+  // Parse from CATATAN string if still empty (fallback for when metadata is missing or lost)
+  const fullCatatan = tx.pesanan?.CATATAN || '';
+  const parts = fullCatatan.split('|');
+
+  if (promos.length === 0 && parts.length >= 1 && parts[0].trim() && parts[0].trim() !== 'Promo/Potongan') {
+    const items = parts[0].trim().split(', ');
+    items.forEach(item => {
+      const match = item.match(/(.*) \(-Rp([\d.]+)\)/);
+      if (match) {
+        promos.push({
+          name: match[1],
+          subtotal: -Number(match[2].replace(/\./g, '')),
+          qty: 1
+        });
+      }
+    });
+  }
+
+  if (charges.length === 0 && parts.length >= 2 && parts[1].trim()) {
+    const items = parts[1].trim().split(', ');
+    items.forEach(item => {
+      const match = item.match(/(.*) \(Rp([\d.]+)\)/);
+      if (match) {
+        charges.push({
+          name: match[1],
+          subtotal: Number(match[2].replace(/\./g, '')),
+          qty: 1
+        });
+      }
+    });
+  }
+
+  normalItems.forEach((item: any) => {
+    const menuName = getFormattedMenuDisplay(item.NAMA_MENU, item.VARIAN);
+    
+    receipt.bold(true)
+      .text(menuName)
+      .bold(false)
+      .newline()
+      // Create padding between QTY and SUBTOTAL
+      .text(`${item.QTY}`)
+      .text(`                Rp${item.SUBTOTAL.toLocaleString('id-ID')}`.slice(-20))
+      .newline()
+      .text(`@ Rp${item.HARGA_SATUAN.toLocaleString('id-ID')}`)
+      .newline();
+  });
+
+  receipt.align('center')
+    .text(lineEqual)
+    .newline()
+    .align('left')
+    .bold(true)
+    .text('SUBTOTAL PESANAN')
+    .text(`               Rp${normalItems.reduce((s, p) => s + p.SUBTOTAL, 0).toLocaleString('id-ID')}`.slice(-21))
+    .bold(false)
+    .newline();
+
+  if (promos.length > 0 || charges.length > 0) {
+    receipt.newline()
+      .align('left');
+
+    if (promos.length > 0) {
+      promos.forEach(p => {
+        receipt.bold(true)
+          .text(p.name.replace('[PROMO] ', ''))
+          .bold(false)
+          .newline()
+          .text('1')
+          .text(`               -Rp${Math.abs(p.subtotal).toLocaleString('id-ID')}`.slice(-21))
+          .newline();
+      });
+    }
+
+    if (charges.length > 0) {
+      charges.forEach(c => {
+        receipt.bold(true)
+          .text(c.name)
+          .bold(false)
+          .newline()
+          .text('1')
+          .text(`                Rp${c.subtotal.toLocaleString('id-ID')}`.slice(-21))
+          .newline();
+      });
+    }
   }
 
   receipt.align('center')
@@ -213,21 +347,32 @@ export const printThermalReceipt = async (device: BluetoothDevice | null, tx: Tr
     .newline()
     .align('left')
     .bold(true)
-    .text('TOTAL')
-    .text(`                    Rp${tx.totalAmount.toLocaleString('id-ID')}`.slice(-24))
+    .text('TOTAL AKHIR')
+    .text(`                Rp${tx.totalAmount.toLocaleString('id-ID')}`.slice(-19))
     .bold(false)
     .newline()
     .newline();
 
   if (tx.pesanan?.CATATAN) {
-    receipt.align('left')
-      .bold(true)
-      .text('Catatan:')
-      .bold(false)
-      .newline()
-      .text(tx.pesanan.CATATAN)
-      .newline()
-      .newline();
+    const fullCatatan = tx.pesanan.CATATAN;
+    
+    // Format is: Promo | Biaya Tambahan | Catatan
+    const parts = fullCatatan.split('|');
+    const userNotePart = parts.length >= 3 ? parts[2].trim() : '';
+    
+    if (userNotePart) {
+      receipt.align('center')
+        .text(line)
+        .newline()
+        .align('left')
+        .bold(true)
+        .text('Catatan:')
+        .bold(false)
+        .newline()
+        .text(`"${userNotePart}"`)
+        .newline()
+        .newline();
+    }
   }
 
   receipt.align('center')

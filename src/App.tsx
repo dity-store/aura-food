@@ -1,3 +1,4 @@
+import { formatToIDDate, formatToIDDateTime } from "./utils/date";
 import React, { useState, useEffect } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
@@ -709,7 +710,7 @@ export default function App() {
                 </div>
                 <p className="text-[10px] text-red-100/70 mt-1.5 leading-snug font-medium flex items-center gap-1 truncate max-w-full">
                   <MapPin className="h-2.5 w-2.5 text-amber-400 shrink-0" />
-                  <span className="truncate">{`${activeBranch === 'ADMIN' ? 'PUSAT' : (activeBranchName || 'MATARAM')}, NTB`} &bull; <Calendar className="h-2.5 w-2.5 shrink-0 inline ml-1 mr-0.5 text-red-300" />{new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                  <span className="truncate">{`${activeBranch === 'ADMIN' ? 'PUSAT' : (activeBranchName || 'MATARAM')}, NTB`} &bull; <Calendar className="h-2.5 w-2.5 shrink-0 inline ml-1 mr-0.5 text-red-300" />{formatToIDDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
                 </p>
               </div>
             </div>
@@ -1040,7 +1041,7 @@ export default function App() {
                         <div className="space-y-4">
                           <div className="flex justify-between items-center text-xs">
                             <span className="text-zinc-500 font-medium whitespace-nowrap">Tanggal & Waktu</span>
-                            <span className="text-zinc-900 font-bold text-right">{new Date(selectedTx.timestamp).toLocaleString('id-ID')}</span>
+                            <span className="text-zinc-900 font-bold text-right">{formatToIDDateTime(selectedTx.timestamp)}</span>
                           </div>
                           <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
                             <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>

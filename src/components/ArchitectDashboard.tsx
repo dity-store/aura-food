@@ -1,3 +1,4 @@
+import { getWITAString } from "../utils/date";
 import React, { useState } from 'react';
 import { Copy, Check, FileText, Code2, GitMerge, ShieldAlert, FolderTree, AlertOctagon, HelpCircle } from 'lucide-react';
 
@@ -111,7 +112,7 @@ function doPost(e) {
       transaction.totalAmount,
       transaction.paymentMethod,
       itemsJson,
-      new Date().toISOString(),
+      getWITAString(),
       "Cloud_Gateway"
     ]);
     

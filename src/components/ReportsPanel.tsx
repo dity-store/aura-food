@@ -1,3 +1,4 @@
+import { getWITAString } from "../utils/date";
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { CustomSelect } from './CustomSelect';
@@ -391,20 +392,45 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
   // Since the Backend API now perfectly handles all multidimensional filtering (cabang, periode, tipe data),
   // we can use the parsed returned data directly and reduce massive client processing
   const filteredKasTransactions = useMemo(() => {
+    let list = parsedKasTransactions;
+    
+    // Safety local filtering to ensure UI state matches filter exactly even if backend response is broad
+    if (filterType === 'PEMASUKAN') {
+      list = list.filter(tx => tx.debit > 0);
+    } else if (filterType === 'PENGELUARAN') {
+      list = list.filter(tx => tx.kredit > 0);
+    }
+
     let currentSaldo = calculatedSaldoAwal;
-    return parsedKasTransactions.map(tx => {
+    return list.map(tx => {
       currentSaldo += (tx.debit - tx.kredit);
       return {
         ...tx,
         saldo: currentSaldo
       };
     });
-  }, [parsedKasTransactions, calculatedSaldoAwal]); 
+  }, [parsedKasTransactions, calculatedSaldoAwal, filterType]); 
   
-  // Directly pull exact aggregated stats from backend
-  const totalOmset = bukuKasData?.pemasukan || 0;
-  const totalPengeluaran = bukuKasData?.pengeluaran || 0;
-  const saldoBersih = bukuKasData?.saldoBersih || 0;
+  // Recalculate metrics locally based on filtered data to ensure they are dynamic
+  const dynamicMetrics = useMemo(() => {
+    let pemasukan = 0;
+    let pengeluaran = 0;
+    
+    filteredKasTransactions.forEach(tx => {
+      pemasukan += tx.debit;
+      pengeluaran += tx.kredit;
+    });
+
+    return {
+      pemasukan,
+      pengeluaran,
+      saldoBersih: pemasukan - pengeluaran
+    };
+  }, [filteredKasTransactions]);
+
+  const totalOmset = dynamicMetrics.pemasukan;
+  const totalPengeluaran = dynamicMetrics.pengeluaran;
+  const saldoBersih = dynamicMetrics.saldoBersih;
 
   // Sum up cash and transfer from actual transactions loaded
   // But strictly ONLY when debit > 0 (as requested: "hanya ambil transaksi yg debitnya tidak 0, alias ambil cash hanya dari uang masuk saja")
@@ -412,7 +438,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     let totalCash = 0;
     let totalTransfer = 0;
 
-    parsedKasTransactions.forEach((tx) => {
+    filteredKasTransactions.forEach((tx) => {
       if (tx.debit > 0) {
         const t = tx.original || {};
         const cashVal = Number(t.cash || t.CASH || t.total_cash || t.TOTAL_CASH || t.Total_Cash || (Array.isArray(t) ? t[6] : 0) || 0);
@@ -434,17 +460,57 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
     });
 
     return { totalCash, totalTransfer };
-  }, [parsedKasTransactions]);
+  }, [filteredKasTransactions]);
+
+  const generateDynamicReportText = () => {
+    const branchName = bukuKasData?.namaCabang || 'SEMUA CABANG';
+    const periodStr = filterPeriode === 'HARIAN' ? selectedDate : `${months[selectedMonth]} ${selectedYear}`;
+    const filterLabel = filterType === 'PEMASUKAN' ? 'PEMASUKAN SAJA' : filterType === 'PENGELUARAN' ? 'PENGELUARAN SAJA' : 'PEMASUKAN & PENGELUARAN';
+    
+    let text = `*📊 LAPORAN KEUANGAN AURA FOOD*\n`;
+    text += `Cabang: ${branchName}\n`;
+    text += `Periode: ${periodStr}\n`;
+    text += `Filter: ${filterLabel}\n\n`;
+    
+    text += `*RINGKASAN:*\n`;
+    text += `💰 Total Pemasukan: Rp${totalOmset.toLocaleString('id-ID')}\n`;
+    text += `💸 Total Pengeluaran: Rp${totalPengeluaran.toLocaleString('id-ID')}\n`;
+    text += `💵 Saldo Bersih: Rp${saldoBersih.toLocaleString('id-ID')}\n`;
+    text += `💳 Total Cash: Rp${calculatedTotalCashAndTransfer.totalCash.toLocaleString('id-ID')}\n`;
+    text += `📱 Total Transfer: Rp${calculatedTotalCashAndTransfer.totalTransfer.toLocaleString('id-ID')}\n\n`;
+    
+    text += `*RINCIAN TRANSAKSI:*\n`;
+    filteredKasTransactions.forEach((tx, i) => {
+      const amount = tx.debit > 0 ? tx.debit : tx.kredit;
+      
+      // Format date robustly
+      let dateDisplay = '';
+      if (tx.date instanceof Date && !isNaN(tx.date.getTime())) {
+        const d = String(tx.date.getDate()).padStart(2, '0');
+        const m = String(tx.date.getMonth() + 1).padStart(2, '0');
+        const y = tx.date.getFullYear();
+        dateDisplay = `[${d}/${m}/${y}]`;
+      } else {
+        dateDisplay = `[${tx.tglStr || '?'}]`;
+      }
+
+      text += `${i + 1}. ${dateDisplay} ${tx.keterangan}: Rp${amount.toLocaleString('id-ID')}\n`;
+    });
+    
+    return text;
+  };
 
   const handleCopyText = () => {
-    navigator.clipboard.writeText(bukuKasData?.textLaporan || '');
+    const reportText = generateDynamicReportText();
+    navigator.clipboard.writeText(reportText);
     setToastType('success');
     setToastMessage("Berhasil disalin ke papan klip!");
     setShowShareMenu(false);
   };
 
   const handleShareWA = () => {
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(bukuKasData?.textLaporan || '')}`, '_blank');
+    const reportText = generateDynamicReportText();
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(reportText)}`, '_blank');
     setToastType('success');
     setToastMessage("Berhasil dibagikan ke WhatsApp!");
     setShowShareMenu(false);
@@ -844,7 +910,7 @@ export default function ReportsPanel({ cabangList, activeBranch }: ReportsPanelP
               <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Pilih Tanggal</label>
               <input 
                 type="date"
-                max={new Date().toISOString().split('T')[0]}
+                max={getWITAString().split('T')[0]}
                 className={`w-full text-[10px] sm:text-xs font-bold bg-white border border-zinc-200 rounded-xl px-3 py-2.5 sm:py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 transition shadow-sm ${loadingBukuKas ? 'opacity-50 cursor-not-allowed' : ''}`}
                 value={selectedDate}
                 disabled={loadingBukuKas}

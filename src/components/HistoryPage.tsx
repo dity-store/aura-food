@@ -37,7 +37,7 @@ const getDefaultFilterState = (initialBranchFilter?: string): HistoryFilterState
   };
 };
 
-let historyInitialFetchDone = new Set<string>();
+let historyInitialFetchDone = new Map<string, string>(); // branch -> last_fetched_date (YYYY-MM-DD)
 let historyFetchingInProgress = new Set<string>();
 
 export default function HistoryPage({ activeBranch, cabangList, onSelectTransaction, onSuccessPrint, onBack, onCreateTransaction, refreshTrigger, initialBranchFilter }: HistoryPageProps) {
@@ -109,7 +109,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
          }
          
          // Ensure we mark it as fetched
-         historyInitialFetchDone.add(fetchBranch);
+         historyInitialFetchDone.set(fetchBranch, new Date().toISOString().split('T')[0]);
          
          // Reload after saving to DB to have consistent state
          const refreshed = await getTransactions();
@@ -161,6 +161,9 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
           return;
         }
         
+        const today = new Date().toISOString().split('T')[0];
+        const lastFetched = historyInitialFetchDone.get(fetchBranch);
+        
         // 1. Get all local first (including pending_sync)
         const allLocal = await getTransactions();
         let displayTxs = [...allLocal];
@@ -172,8 +175,8 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
         displayTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setHistory(displayTxs);
 
-        // 2. Fetch Remote only if this is the first time for this branch during session, and online
-        if (!historyInitialFetchDone.has(fetchBranch) && !historyFetchingInProgress.has(fetchBranch) && navigator.onLine) {
+        // 2. Fetch Remote only if this is the first time today for this branch, and online
+        if (lastFetched !== today && !historyFetchingInProgress.has(fetchBranch) && navigator.onLine) {
           historyFetchingInProgress.add(fetchBranch);
           setIsFetchingHistory(true);
           try {
@@ -198,7 +201,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                updatedTxs.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                setHistory(updatedTxs);
             }
-            historyInitialFetchDone.add(fetchBranch);
+            historyInitialFetchDone.set(fetchBranch, today);
           } catch (e) {
             console.warn("History remote fetch failed on first load:", e);
           } finally {
@@ -428,11 +431,28 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                             <span className="text-[10px] text-red-750 font-bold hover:underline inline-flex items-center gap-0.5 transition">
                               {activeBranch === 'ADMIN' ? 'Lihat Detail Pesanan' : 'Lihat Cetak Struk'}
                             </span>
-                            {tx.pesanan?.CATATAN && (
-                              <p className="text-[9px] text-zinc-500 italic mt-1.5 border-l-2 border-zinc-200 pl-2 max-w-[200px] truncate">
-                                "{tx.pesanan.CATATAN}"
-                              </p>
-                            )}
+                            {(() => {
+                              const fullCatatan = tx.pesanan?.CATATAN;
+                              if (!fullCatatan) return null;
+                              
+                              const parts = fullCatatan.split('|');
+                              let displayNote = '';
+                              if (parts.length >= 3) {
+                                // New format: Promo | Charge | Note
+                                displayNote = parts[2].trim();
+                              } else {
+                                // Old format or partial: show whole string if no pipes, or first part
+                                displayNote = fullCatatan.trim();
+                              }
+
+                              if (!displayNote) return null;
+
+                              return (
+                                <p className="text-[9px] text-zinc-500 italic mt-1.5 border-l-2 border-zinc-200 pl-2 max-w-[200px] truncate">
+                                  "{displayNote}"
+                                </p>
+                              );
+                            })()}
                           </div>
                           <div className="text-right">
                              <p className="text-sm font-black text-zinc-950 whitespace-nowrap">
@@ -613,7 +633,7 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                       <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-3">Item Pesanan</p>
                       <div className="space-y-3 relative before:absolute before:inset-y-0 before:left-[-1px] before:w-[3px] before:bg-zinc-100 before:rounded-full ml-1 pl-3">
                         {historyModalTx.detail?.map((item, idx) => (
-                           <div key={idx} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                           <div key={`d-${idx}`} className="flex justify-between items-start text-sm pb-3 last:pb-0">
                              <div className="text-left font-medium text-zinc-800">
                                <span className="font-bold text-zinc-900">{item.QTY}x</span> {item.NAMA_MENU} 
                                {item.VARIAN_NAME && <div className="text-[10px] text-zinc-400 mt-0.5">&bull; {item.VARIAN_NAME}</div>}
@@ -623,6 +643,75 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                              </div>
                            </div>
                         ))}
+                        {/* Structured Promos */}
+                        {historyModalTx.pesanan?.PROMOS?.map((p, idx) => {
+                          const price = p.discountedPrice !== undefined ? p.discountedPrice : p.varian.HARGA;
+                          return (
+                            <div key={`p-${idx}`} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                              <div className="text-left font-bold text-zinc-900">
+                                <span className="font-bold">{p.quantity}x</span> {p.menu.NAMA_MENU.replace('[PROMO] ', '')}
+                              </div>
+                              <div className="text-right font-bold text-zinc-900 whitespace-nowrap">
+                                -Rp{Math.abs(price * p.quantity).toLocaleString('id-ID')}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {/* Parsed Promos from CATATAN */}
+                        {(() => {
+                          if (historyModalTx.pesanan?.PROMOS?.length) return null;
+                          const catatan = historyModalTx.pesanan?.CATATAN || '';
+                          const promoPart = catatan.split('|')[0]?.trim();
+                          if (!promoPart || promoPart === 'Promo/Potongan') return null;
+                          
+                          return promoPart.split(', ').map((item, idx) => {
+                            const match = item.match(/(.*) \(-Rp([\d.]+)\)/);
+                            if (!match) return null;
+                            return (
+                              <div key={`pc-${idx}`} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                                <div className="text-left font-bold text-zinc-900">
+                                  {match[1]}
+                                </div>
+                                <div className="text-right font-bold text-zinc-900 whitespace-nowrap">
+                                  -Rp{match[2]}
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                        {/* Structured Charges */}
+                        {historyModalTx.pesanan?.ADDITIONAL_CHARGES?.map((c, idx) => (
+                           <div key={`c-${idx}`} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                             <div className="text-left font-bold text-zinc-900">
+                               <span className="font-bold">{c.qty}x</span> {c.name}
+                             </div>
+                             <div className="text-right font-bold text-zinc-900 whitespace-nowrap">
+                               Rp{(c.price * c.qty).toLocaleString('id-ID')}
+                             </div>
+                           </div>
+                        ))}
+                        {/* Parsed Charges from CATATAN */}
+                        {(() => {
+                          if (historyModalTx.pesanan?.ADDITIONAL_CHARGES?.length) return null;
+                          const catatan = historyModalTx.pesanan?.CATATAN || '';
+                          const chargePart = catatan.split('|')[1]?.trim();
+                          if (!chargePart) return null;
+                          
+                          return chargePart.split(', ').map((item, idx) => {
+                            const match = item.match(/(.*) \(Rp([\d.]+)\)/);
+                            if (!match) return null;
+                            return (
+                              <div key={`cc-${idx}`} className="flex justify-between items-start text-sm pb-3 last:pb-0">
+                                <div className="text-left font-bold text-zinc-900">
+                                  {match[1]}
+                                </div>
+                                <div className="text-right font-bold text-zinc-900 whitespace-nowrap">
+                                  Rp{match[2]}
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
                     </div>
                     <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
@@ -631,14 +720,31 @@ export default function HistoryPage({ activeBranch, cabangList, onSelectTransact
                         <span className="text-base font-black text-red-700">Rp{historyModalTx.totalAmount.toLocaleString('id-ID')}</span>
                       </div>
                     </div>
-                    {historyModalTx.pesanan?.CATATAN && (
-                      <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
-                        <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-1">Catatan Pesanan</p>
-                        <p className="text-xs text-zinc-700 bg-zinc-50 p-3 rounded-xl border border-zinc-100 leading-relaxed italic">
-                          "{historyModalTx.pesanan.CATATAN}"
-                        </p>
-                      </div>
-                    )}
+                    {(() => {
+                      const fullCatatan = historyModalTx.pesanan?.CATATAN;
+                      if (!fullCatatan) return null;
+                      
+                      const parts = fullCatatan.split('|');
+                      let displayNote = '';
+                      if (parts.length >= 3) {
+                        displayNote = parts[2].trim();
+                      } else if (fullCatatan.includes('|')) {
+                        displayNote = ''; 
+                      } else {
+                        displayNote = fullCatatan.trim();
+                      }
+
+                      if (!displayNote) return null;
+
+                      return (
+                        <div className="pt-4 mt-2 border-t border-dashed border-zinc-200">
+                          <p className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest mb-1">Catatan Pesanan</p>
+                          <p className="text-xs text-zinc-700 bg-zinc-50 p-3 rounded-xl border border-zinc-100 leading-relaxed italic">
+                            "{displayNote}"
+                          </p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               ) : (

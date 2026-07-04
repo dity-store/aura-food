@@ -248,14 +248,16 @@ export async function getTransactionsFromGAS(idCabang: string, tanggal?: string)
         TOTAL_TAGIHAN: item.TOTAL_TAGIHAN,
         METODE_BAYAR: item.METODE_BAYAR,
         JENIS_PESANAN: item.JENIS_PESANAN || '',
-        CATATAN: item.CATATAN || ''
+        CATATAN: item.CATATAN || '',
+        PROMOS: item.PROMOS || item.promos || [],
+        ADDITIONAL_CHARGES: item.ADDITIONAL_CHARGES || item.additional_charges || []
       },
       detail: item.detail || [], // Use detail from response
       status: 'synced',
       timestamp: item.TANGGAL_WAKTU,
       paymentMethod: item.METODE_BAYAR,
       totalAmount: Number(item.TOTAL_TAGIHAN),
-      cabang: item.ID_CABANG
+      cabang: item.NAMA_CABANG || item.ID_CABANG
     }));
   } catch (err) {
     console.warn("getTransactionsFromGAS error:", err);
@@ -274,124 +276,117 @@ export async function getAdminDashboardMetrics(idCabang: string, selectedDateStr
   yesterdayRevenue: number;
 }> {
   const config = getGASConfig();
-  if (config && config.webAppUrl) {
-    try {
-      let paramTanggal: string | undefined = undefined;
-      let yesterdayStr: string | undefined = undefined;
+  if (!config || !config.webAppUrl) throw new Error("Gagal mengambil dashboard dari server: Konfigurasi belum diatur");
+
+  try {
+    let paramTanggal: string | undefined = undefined;
+    let yesterdayStr: string | undefined = undefined;
+    
+    if (selectedDateStr) {
+      const [y, m, d] = selectedDateStr.split('-');
+      paramTanggal = `${d}/${m}/${y}`;
       
-      if (selectedDateStr) {
-        const [y, m, d] = selectedDateStr.split('-');
-        paramTanggal = `${d}/${m}/${y}`;
-        
-        const dObj = new Date(Number(y), Number(m) - 1, Number(d));
-        dObj.setDate(dObj.getDate() - 1);
-        const yy = dObj.getFullYear();
-        const mm = String(dObj.getMonth() + 1).padStart(2, '0');
-        const dd = String(dObj.getDate()).padStart(2, '0');
-        yesterdayStr = `${dd}/${mm}/${yy}`;
-      }
-
-      const urlFull = new URL(config.webAppUrl);
-      urlFull.searchParams.append('action', 'get_admin_dashboard');
-      if (idCabang && idCabang !== 'All' && idCabang !== 'Semua' && idCabang !== 'ADMIN') {
-        urlFull.searchParams.append('id_cabang', idCabang);
-      }
-      if (paramTanggal) {
-        urlFull.searchParams.append('tanggal', paramTanggal); // Send tanggal!
-      }
-      urlFull.searchParams.append('_ts', Date.now().toString());
-
-      const res = await fetch(urlFull.toString(), { redirect: 'follow' });
-
-      if (res.ok) {
-        const result = await res.json();
-        if (result.status === 'success') {
-          const data = result.data;
-          console.log("DASHBOARD DATA FROM GAS:", data);
-          
-          let yesterdayRevenue = 0;
-          try {
-            if (yesterdayStr) {
-              const yUrl = new URL(config.webAppUrl);
-              yUrl.searchParams.append('action', 'get_admin_dashboard');
-              if (idCabang && idCabang !== 'All' && idCabang !== 'Semua' && idCabang !== 'ADMIN') {
-                yUrl.searchParams.append('id_cabang', idCabang);
-              }
-              yUrl.searchParams.append('tanggal', yesterdayStr);
-              yUrl.searchParams.append('_ts', Date.now().toString());
-              const yRes = await fetch(yUrl.toString(), { redirect: 'follow' });
-              if (yRes.ok) {
-                const yResult = await yRes.json();
-                if (yResult.status === 'success') {
-                  yesterdayRevenue = Number(yResult.data.totalRevenue || 0);
-                }
-              }
-            }
-          } catch (e) {
-             console.warn("Failed fetching yesterday revenue", e);
-          }
-
-          let computedTotalCash = 0;
-          let computedTotalTransfer = 0;
-          try {
-             const txUrl = new URL(config.webAppUrl);
-             txUrl.searchParams.append('action', 'get_all_transactions');
-             if (idCabang && idCabang !== 'All' && idCabang !== 'Semua' && idCabang !== 'ADMIN') {
-               txUrl.searchParams.append('id_cabang', idCabang);
-             }
-             if (paramTanggal) {
-               txUrl.searchParams.append('tanggal', paramTanggal);
-             }
-             const txRes = await fetch(txUrl.toString(), { redirect: 'follow' });
-             if (txRes.ok) {
-                const txResult = await txRes.json();
-                if (txResult.status === 'success') {
-                   txResult.data.forEach((p: any) => {
-                      const metode = String(p.METODE_BAYAR || "").toUpperCase();
-                      const jenis = String(p.JENIS_PESANAN || "").toUpperCase();
-                      if (jenis !== 'COMPLIMENT' && jenis !== 'ENDORSE') {
-                         const tagihan = Number(p.TOTAL_TAGIHAN || 0);
-                         if (metode === 'CASH' || metode === 'TUNAI') {
-                             computedTotalCash += tagihan;
-                         } else {
-                             computedTotalTransfer += tagihan;
-                         }
-                      }
-                   });
-                }
-             }
-          } catch (e) {
-             console.warn("Failed fetching all transactions for cash/transfer", e);
-          }
-
-          return {
-            totalRevenue: Number(data.totalRevenue || 0),
-            totalTransactions: Number(data.totalTransactions || 0),
-            totalCash: Number(data.totalCash || computedTotalCash),
-            totalTransfer: Number(data.totalTransfer || computedTotalTransfer),
-            averageTransactionValue: Number(data.averageTransactionValue || (data.totalTransactions ? data.totalRevenue / data.totalTransactions : 0)),
-            categorySales: data.categorySales || { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 },
-            recentTransactions: (data.recentTransactions || []).map((p: any) => ({
-              id: String(p.ID_PESANAN || p[0] || ''),
-              pesanan: p,
-              detail: p.detail || [],
-              status: 'synced' as 'synced',
-              timestamp: p.TANGGAL_WAKTU || p.TANGGAL || p[1],
-              paymentMethod: p.METODE_BAYAR || p[4],
-              totalAmount: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
-              cabang: p.ID_CABANG || p[2]
-            })),
-            yesterdayRevenue: yesterdayRevenue
-          };
-        }
-      }
-    } catch (err) {
-      console.warn("Server-side dashboard metrics failed", err);
-      throw err;
+      const dObj = new Date(Number(y), Number(m) - 1, Number(d));
+      dObj.setDate(dObj.getDate() - 1);
+      const yy = dObj.getFullYear();
+      const mm = String(dObj.getMonth() + 1).padStart(2, '0');
+      const dd = String(dObj.getDate()).padStart(2, '0');
+      yesterdayStr = `${dd}/${mm}/${yy}`;
     }
+
+    const apiBranchId = (idCabang && idCabang !== 'All' && idCabang !== 'Semua' && idCabang !== 'ADMIN') ? idCabang : undefined;
+
+    // Define fetch tasks
+    const fetchTodayMetrics = async () => {
+      const url = new URL(config.webAppUrl);
+      url.searchParams.append('action', 'get_admin_dashboard');
+      if (apiBranchId) url.searchParams.append('id_cabang', apiBranchId);
+      if (paramTanggal) url.searchParams.append('tanggal', paramTanggal);
+      url.searchParams.append('_ts', Date.now().toString());
+      const res = await fetch(url.toString(), { redirect: 'follow' });
+      if (!res.ok) throw new Error("Fetch metrics failed");
+      return res.json();
+    };
+
+    const fetchYesterdayMetrics = async () => {
+      if (!yesterdayStr) return null;
+      const url = new URL(config.webAppUrl);
+      url.searchParams.append('action', 'get_admin_dashboard');
+      if (apiBranchId) url.searchParams.append('id_cabang', apiBranchId);
+      url.searchParams.append('tanggal', yesterdayStr);
+      url.searchParams.append('_ts', Date.now().toString());
+      const res = await fetch(url.toString(), { redirect: 'follow' });
+      if (!res.ok) return null;
+      return res.json();
+    };
+
+    const fetchTransactions = async () => {
+      const url = new URL(config.webAppUrl);
+      url.searchParams.append('action', 'get_all_transactions');
+      if (apiBranchId) url.searchParams.append('id_cabang', apiBranchId);
+      if (paramTanggal) url.searchParams.append('tanggal', paramTanggal);
+      url.searchParams.append('_ts', Date.now().toString());
+      const res = await fetch(url.toString(), { redirect: 'follow' });
+      if (!res.ok) return null;
+      return res.json();
+    };
+
+    // Execute in parallel
+    const [todayResult, yesterdayResult, txResult] = await Promise.all([
+      fetchTodayMetrics(),
+      fetchYesterdayMetrics(),
+      fetchTransactions()
+    ]);
+
+    if (todayResult.status !== 'success') throw new Error(todayResult.message || "Gagal mengambil data hari ini");
+
+    const data = todayResult.data;
+    let yesterdayRevenue = 0;
+    if (yesterdayResult && yesterdayResult.status === 'success') {
+      yesterdayRevenue = Number(yesterdayResult.data.totalRevenue || 0);
+    }
+
+    let computedTotalCash = 0;
+    let computedTotalTransfer = 0;
+    if (txResult && txResult.status === 'success') {
+      txResult.data.forEach((p: any) => {
+        const metode = String(p.METODE_BAYAR || "").toUpperCase();
+        const jenis = String(p.JENIS_PESANAN || "").toUpperCase();
+        if (jenis !== 'COMPLIMENT' && jenis !== 'ENDORSE') {
+          const tagihan = Number(p.TOTAL_TAGIHAN || 0);
+          if (metode === 'CASH' || metode === 'TUNAI') {
+            computedTotalCash += tagihan;
+          } else {
+            computedTotalTransfer += tagihan;
+          }
+        }
+      });
+    }
+
+    return {
+      totalRevenue: Number(data.totalRevenue || 0),
+      totalTransactions: Number(data.totalTransactions || 0),
+      totalCash: Number(data.totalCash || computedTotalCash),
+      totalTransfer: Number(data.totalTransfer || computedTotalTransfer),
+      averageTransactionValue: Number(data.averageTransactionValue || (data.totalTransactions ? data.totalRevenue / data.totalTransactions : 0)),
+      categorySales: data.categorySales || { Makanan: 0, Minuman: 0, Pasta: 0, Special: 0 },
+      recentTransactions: (data.recentTransactions || []).map((p: any) => ({
+        id: String(p.ID_PESANAN || p[0] || ''),
+        pesanan: p,
+        detail: p.detail || [],
+        status: 'synced' as 'synced',
+        timestamp: p.TANGGAL_WAKTU || p.TANGGAL || p[1],
+        paymentMethod: p.METODE_BAYAR || p[4],
+        totalAmount: Number(p.TOTAL_TAGIHAN || p.Total || p[3] || 0),
+        cabang: p.ID_CABANG || p[2]
+      })),
+      yesterdayRevenue: yesterdayRevenue
+    };
+
+  } catch (err) {
+    console.warn("Server-side dashboard metrics failed", err);
+    throw err;
   }
-  
-  throw new Error("Gagal mengambil dashboard dari server");
 }
 
 export async function getAdminReportsData(
